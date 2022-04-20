@@ -1,8 +1,12 @@
-"""Tasks for connecting to SFTP servers"""
+"""Tasks for connecting to SFTP servers using pysftp. Each task takes a connection_info parameter,
+a dict whose KVs should match the keyword arguments passed to pysftp.Connection constructor.
+The private_key arg should instead contain the key file's contents. You can also supply a
+known_hosts arg with the contents of a known hosts file to use to fill the cnopts argument."""
 
 import io
-from typing import BinaryIO
+from typing import BinaryIO, Union
 import os
+import stat
 
 import prefect
 from prefect import task
@@ -25,30 +29,52 @@ def _make_known_hosts(connection_info):
         connection_info['cnopts'] = cnopts
         del connection_info['known_hosts']
 
-@task()
-def sftp_put(file_object: BinaryIO, file_path: str, connection_info: dict) -> None:
-    """Writes a file-like object to the given path on an SFTP server. The KVs of connection_info
-    should match the keyword arguments passed to pysftp.Connection constructor. The private_key
-    arg should instead contain the key file's contents. You can also supply a known_hosts arg
-    with the contents of a known hosts file to use to fill the cnopts argument."""
+@task
+def put(file_object: Union[BinaryIO, bytes], file_path: str, connection_info: dict) -> None:
+    """Writes a file-like object or bytes string to the given path on an SFTP server. """
 
     _make_ssh_key(connection_info)
     _make_known_hosts(connection_info)
+    if not hasattr(file_object, 'read'):
+        file_object = io.BytesIO(file_object)
     with pysftp.Connection(**connection_info) as sftp:
         if not sftp.isdir(os.path.dirname(file_path)):
-            sftp.mkdir(os.path.dirname(file_path))
+            sftp.makedirs(os.path.dirname(file_path))
             sftp.putfo(file_object, file_path)
-    prefect.context.get('logger').info(f"sftp_put {file_path} on {connection_info['host']}")
+    prefect.context.get('logger').info(f"sft.put {file_path} on {connection_info['host']}")
 
-@task()
-def sftp_get(file_path: str, connection_info: dict) -> bytes:
-    """Returns the bytes content for the file at the given path from an SFTP server. The KVs of
-    connection_info should match the keyword arguments passed to pysftp.Connection constructor"""
+@task
+def get(file_path: str, connection_info: dict) -> bytes:
+    """Returns the bytes content for the file at the given path from an SFTP server."""
 
     _make_ssh_key(connection_info)
     _make_known_hosts(connection_info)
     with pysftp.Connection(**connection_info) as sftp:
         out = io.BytesIO()
         sftp.getfo(file_path, out)
-    prefect.context.get('logger').info(f"sftp_get {file_path} on {connection_info['host']}")
+    prefect.context.get('logger').info(f"sftp.get {file_path} on {connection_info['host']}")
     return out.getvalue()
+
+@task
+def remove(file_path: str, connection_info: dict) -> None:
+    """Removes the identified file."""
+
+    _make_ssh_key(connection_info)
+    _make_known_hosts(connection_info)
+    with pysftp.Connection(**connection_info) as sftp:
+        sftp.remove(file_path)
+
+@task
+def list_files(folder_path: str, connection_info: dict) -> list:
+    """Returns a list of filenames for files in the given folder. Folders are not included."""
+
+    _make_ssh_key(connection_info)
+    _make_known_hosts(connection_info)
+    with pysftp.Connection(**connection_info) as sftp:
+        return [i for i in sftp.listdir_attr(folder_path) if stat.S_ISREG(i.st_mode)]
+
+@task
+def join_path(left: str, right: str) -> str:
+    """Task wrapper for os.path.join, useful for getting full paths after calling list_files"""
+
+    return os.path.join(left, right)

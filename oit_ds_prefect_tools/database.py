@@ -18,7 +18,7 @@ def _make_oracle_dsn(connection_info):
         del connection_info['host']
         del connection_info['sid']
 
-@task()
+@task
 def oracle_extract(sql_statement: str, connection_info: dict, dataset_name: str='') -> pd.DataFrame:
     """Returns a DataFrame derived from a SQL SELECT statement executed against the given
     database. The dataset_name provides additional readability for code and logging. The KVs
