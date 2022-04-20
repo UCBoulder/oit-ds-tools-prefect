@@ -19,7 +19,7 @@ def _make_oracle_dsn(connection_info):
         del connection_info['sid']
 
 @task
-def oracle_extract(sql_statement: str, connection_info: dict, dataset_name: str='') -> pd.DataFrame:
+def oracle_extract(sql_query: str, connection_info: dict) -> pd.DataFrame:
     """Returns a DataFrame derived from a SQL SELECT statement executed against the given
     database. The dataset_name provides additional readability for code and logging. The KVs
     of connection_info should match the keyword arguments passed to cx_Oracle.connect, with
@@ -31,6 +31,28 @@ def oracle_extract(sql_statement: str, connection_info: dict, dataset_name: str=
     if 'encoding' not in connection_info:
         connection_info['encoding'] = 'UTF-8'
     conn = cx_Oracle.connect(**connection_info)
-    data = pd.read_sql(sql_statement, conn)
-    prefect.context.get('logger').info(f"query_select {dataset_name} from {connection_info['dsn']}")
+    try:
+        host = conn.dsn.split('HOST=')[1].split(')')[0]
+    except IndexError:
+        host = 'UNKNOWN'
+    sql_snip = ' '.join(sql_query.split())[:50]
+    try:
+        data = pd.read_sql_query(sql_query, conn)
+    except pd.io.sql.DatabaseError:
+        # Can't get detailed error information from this, so reproduce with oracle library
+        try:
+            conn.cursor().execute(sql_query)
+        except cx_Oracle.DatabaseError as exc:
+            try:
+                offset = exc.args[0].offset
+            except (IndexError, AttributeError):
+                pass
+            else:
+                line_no = len(sql_query[:offset].split('\n'))
+                line = sql_query[:offset].split('\n')[-1] + '█' + sql_query[offset:].split('\n')[0]
+                prefect.context.get('logger').error(
+                    f'Oracle database error! {exc}\nLine {line_no}: {line[:100]}')
+            raise
+        raise
+    prefect.context.get('logger').info(f"Read {len(data.index)} rows from {host}: {sql_snip}")
     return data

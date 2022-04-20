@@ -39,6 +39,9 @@ def failure_notifier(smtp_info_keyname: str, contacts_param: str) -> Callable:
                           f'{flow.name}: FAILURE')
         msg.attach(MIMEText(body))
 
+        prefect.context.get('logger').info(
+            f'Emailing failure notification to {contacts}:\nSUBJECT: {msg["subject"]}\n\n{body}')
+
         mailserver = smtplib.SMTP(smtp_info['host'], smtp_info['port'])
         mailserver.sendmail(smtp_info['from'].split(', '), contacts.split(', '), msg.as_string())
         mailserver.quit()
