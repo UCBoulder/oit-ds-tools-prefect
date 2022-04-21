@@ -1,7 +1,7 @@
 """Tasks for connecting to SFTP servers using pysftp. Each task takes a connection_info parameter,
 a dict whose KVs should match the keyword arguments passed to pysftp.Connection constructor.
 The private_key arg should instead contain the key file's contents. You can also supply a
-known_hosts arg with the contents of a known hosts file to use to fill the cnopts argument."""
+known_hosts arg with a list of lines from a known hosts file to use to fill the cnopts argument."""
 
 import io
 from typing import BinaryIO, Union
@@ -30,7 +30,7 @@ def _make_ssh_key(connection_info):
 def _make_known_hosts(connection_info):
     if 'known_hosts' in connection_info:
         with open("flow_known_hosts", 'w', encoding="ascii") as fileobj:
-            fileobj.write(connection_info['known_hosts'])
+            fileobj.writelines(connection_info['known_hosts'])
         cnopts = pysftp.CnOpts()
         cnopts.hostkeys.load('flow_known_hosts')
         connection_info['cnopts'] = cnopts
