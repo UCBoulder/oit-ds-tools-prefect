@@ -5,7 +5,9 @@ import cx_Oracle
 from prefect import task
 import pandas as pd
 
-# Utility function for handling SIDs with Oracle connections
+
+# Oracle functions
+
 def _make_oracle_dsn(connection_info):
     if 'sid' in connection_info:
         if 'port' in connection_info:
@@ -18,14 +20,12 @@ def _make_oracle_dsn(connection_info):
         del connection_info['host']
         del connection_info['sid']
 
-@task
-def oracle_extract(sql_query: str, connection_info: dict) -> pd.DataFrame:
+def oracle_sql_extract(sql_query: str, connection_info: dict) -> pd.DataFrame:
     """Returns a DataFrame derived from a SQL SELECT statement executed against the given
-    database. The dataset_name provides additional readability for code and logging. The KVs
-    of connection_info should match the keyword arguments passed to cx_Oracle.connect, with
-    "dsn" being the "easy connection string" (see Oracle docs). Be sure to give the password
-    as a separate field, not in the DSN. Or pass "host", "port", and "sid" individually. Connection
-    encoding is automatically set to utf-8 if missing."""
+    database. The KVs of connection_info should match the keyword arguments passed to
+    cx_Oracle.connect, with "dsn" being the "easy connection string" (see Oracle docs). Be sure to
+    give the password as a separate field, not in the DSN. Or pass "host", "port", and "sid"
+    individually. Connection encoding is automatically set to utf-8 if missing."""
 
     _make_oracle_dsn(connection_info)
     if 'encoding' not in connection_info:
@@ -56,3 +56,13 @@ def oracle_extract(sql_query: str, connection_info: dict) -> pd.DataFrame:
         raise
     prefect.context.get('logger').info(f"Read {len(data.index)} rows from {host}: {sql_snip}")
     return data
+
+
+# System-agnostic tasks
+
+@task
+def sql_extract(sql_query: str, connection_info: dict) -> pd.DataFrame:
+    """Returns a DataFrame derived from a SQL SELECT statement executed against the given
+    database. Currently only Oracle databases are supported: see oracle_sql_extract for details."""
+
+    return oracle_sql_extract(sql_query, connection_info)
