@@ -113,7 +113,9 @@ def store_dataframe(dataframe: pd.DataFrame, object_name: str, connection_info: 
     function = _switch(connection_info,
                        sftp=sftp_put,
                        minio=minio_put)
-    function(data, object_name, connection_info)
+    prefect.context.get('logger').info(
+        f'Storing dataframe {object_name} with {len(dataframe.index)} rows in Parquet format')
+    function(data, f'{object_name}.parquet', connection_info)
 
 @task
 def retrieve_dataframe(object_name: str, connection_info: dict) -> pd.DataFrame:
@@ -124,9 +126,12 @@ def retrieve_dataframe(object_name: str, connection_info: dict) -> pd.DataFrame:
     function = _switch(connection_info,
                        sftp=sftp_get,
                        minio=minio_get)
-    contents = function(object_name, connection_info)
+    contents = function(f'{object_name}.parquet', connection_info)
     data = io.BytesIO(contents)
-    return pd.read_parquet(data)
+    out = pd.read_parquet(data)
+    prefect.context.get('logger').info(
+        f'Retrieved dataframe {object_name} with {len(out.index)} rows')
+    return out
 
 
 # SFTP functions
