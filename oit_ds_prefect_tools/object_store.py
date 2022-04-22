@@ -22,6 +22,7 @@ import stat
 
 import prefect
 from prefect import task
+import pandas as pd
 import pysftp
 from minio import Minio
 
@@ -95,6 +96,32 @@ def list_names(connection_info: dict, prefix_or_dir: str =None) -> list[str]:
         function(connection_info, prefix_or_dir)
     else:
         function(connection_info)
+
+@task
+def store_dataframe(dataframe: pd.DataFrame, object_name: str, connection_info: dict) -> None:
+    """Writes the given dataframe to the identified storage system. The storage method and format
+    should be considered opaque; reading the data should only be done with retrieve_dataframe.
+    """
+
+    data = io.BytesIO()
+    dataframe.to_parquet(data)
+    function = _switch(connection_info,
+                       sftp=sftp_put,
+                       minio=minio_put)
+    function(data, object_name, connection_info)
+
+@task
+def retrieve_dataframe(object_name: str, connection_info: dict) -> pd.DataFrame:
+    """Writes the given dataframe to the identified storage system. The storage method and format
+    should be considered opaque; reading the data should only be done with retrieve_dataframe.
+    """
+
+    function = _switch(connection_info,
+                       sftp=sftp_get,
+                       minio=minio_get)
+    contents = function(object_name, connection_info)
+    data = io.BytesIO(contents)
+    return pd.read_parquet(data)
 
 
 # SFTP functions

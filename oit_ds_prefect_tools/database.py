@@ -6,6 +6,16 @@ from prefect import task
 import pandas as pd
 
 
+# System-agnostic tasks
+
+@task
+def sql_extract(sql_query: str, connection_info: dict) -> pd.DataFrame:
+    """Returns a DataFrame derived from a SQL SELECT statement executed against the given
+    database. Currently only Oracle databases are supported: see oracle_sql_extract for details."""
+
+    return oracle_sql_extract(sql_query, connection_info)
+
+
 # Oracle functions
 
 def _make_oracle_dsn(connection_info):
@@ -56,13 +66,3 @@ def oracle_sql_extract(sql_query: str, connection_info: dict) -> pd.DataFrame:
         raise
     prefect.context.get('logger').info(f"Read {len(data.index)} rows from {host}: {sql_snip}")
     return data
-
-
-# System-agnostic tasks
-
-@task
-def sql_extract(sql_query: str, connection_info: dict) -> pd.DataFrame:
-    """Returns a DataFrame derived from a SQL SELECT statement executed against the given
-    database. Currently only Oracle databases are supported: see oracle_sql_extract for details."""
-
-    return oracle_sql_extract(sql_query, connection_info)
