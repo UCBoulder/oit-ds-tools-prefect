@@ -9,8 +9,8 @@ supported systems:
 The remaining KVs of connection_info should map directly to the keyword arguments used in calling
 the constructor indicated in the list above, with some exceptions:
     - For sftp, the private_key arg should instead contain the key file's contents. You can also
-        supply a known_hosts arg with a list of lines from a known_hosts file to use to fill the
-        cnopts argument of pysftp.Connection
+        supply a known_hosts arg indicating a Prefect KV Store key whose value is a list of lines
+        from a known_hosts file to use to populate the cnopts argument.
     - For minio, must include an additional "bucket" argument for the bucket name. Also, if
         "secure" is omitted, it defaults to True.
 """
@@ -25,6 +25,8 @@ from prefect import task
 import pandas as pd
 import pysftp
 from minio import Minio
+
+from . import util
 
 # pylint:disable=not-callable
 
@@ -135,8 +137,9 @@ def _make_ssh_key(connection_info):
 
 def _make_known_hosts(connection_info):
     if 'known_hosts' in connection_info:
+        known_hosts = util.get_config_value(connection_info['known_hosts'])
         with open("flow_known_hosts", 'w', encoding="ascii") as fileobj:
-            fileobj.writelines(connection_info['known_hosts'])
+            fileobj.writelines(known_hosts)
         cnopts = pysftp.CnOpts()
         cnopts.hostkeys.load('flow_known_hosts')
         connection_info['cnopts'] = cnopts
