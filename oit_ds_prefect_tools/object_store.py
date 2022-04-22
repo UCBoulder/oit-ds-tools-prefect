@@ -59,16 +59,20 @@ def get(object_name: str, connection_info: dict) -> bytes:
     function(object_name, connection_info)
 
 @task
-def put(binary_object: Union[BinaryIO, bytes], object_name: str, connection_info: dict) -> None:
+def put(binary_object: Union[BinaryIO, bytes],
+        object_name: str,
+        connection_info: dict,
+        **kwargs) -> None:
     """Writes a binary file-like object or bytes string with the given name to the identified
-    system."""
+    system. Additional kwargs can be specified for metadata, tags, etc. when using object storage.
+    """
 
     if not hasattr(binary_object, 'read'):
         binary_object = io.BytesIO(binary_object)
     function = _switch(connection_info,
                        sftp=sftp_put,
                        minio=minio_put)
-    function(binary_object, object_name, connection_info)
+    function(binary_object, object_name, connection_info, **kwargs)
 
 @task
 def remove(object_name: str, connection_info: dict) -> None:
@@ -80,14 +84,18 @@ def remove(object_name: str, connection_info: dict) -> None:
     function(object_name, connection_info)
 
 @task
-def list_objects(connection_info: dict, prefix_or_dir: str = None) -> list:
-    """Returns a list of objects or filenames in the given folder. Filters by object name prefix or
+def list_names(connection_info: dict, prefix_or_dir: str =None) -> list[str]:
+    """Returns a list of object or file names in the given folder. Filters by object name prefix or
     directory path depending on the system. Folders are not included; non-recursive."""
 
     function = _switch(connection_info,
                        sftp=sftp_list,
                        minio=minio_list)
-    function(prefix_or_dir, connection_info)
+    if prefix_or_dir:
+        function(connection_info, prefix_or_dir)
+    else:
+        function(connection_info)
+
 
 # SFTP functions
 
@@ -117,12 +125,15 @@ def sftp_get(file_path: str, connection_info: dict) -> bytes:
         sftp.getfo(file_path, out)
     out = out.getvalue()
     prefect.context.get('logger').info(
-        f"Got file {file_path} ({_sizeof_fmt(len(out))}) from {connection_info['host']}")
+        f"SFTP: Got file {file_path} ({_sizeof_fmt(len(out))}) from {connection_info['host']}")
     return out.getvalue()
 
-def sftp_put(file_object: Union[BinaryIO, bytes], file_path: str, connection_info: dict) -> None:
+def sftp_put(file_object: BinaryIO, file_path: str, connection_info: dict, **kwargs) -> None:
     """Writes a file-like object or bytes string to the given path on an SFTP server. """
 
+    if kwargs:
+        prefect.context.get('logger').warning(
+            f'Additional kwargs not supported by SFTP: {kwargs.keys()}')
     _make_ssh_key(connection_info)
     _make_known_hosts(connection_info)
     with pysftp.Connection(**connection_info) as sftp:
@@ -130,7 +141,8 @@ def sftp_put(file_object: Union[BinaryIO, bytes], file_path: str, connection_inf
             sftp.makedirs(os.path.dirname(file_path))
             sftp.putfo(file_object, file_path)
     prefect.context.get('logger').info(
-        f"Put file {file_path} ({_sizeof_fmt(file_object.tell())}) onto {connection_info['host']}")
+        f"SFTP: Put file {file_path} ({_sizeof_fmt(file_object.tell())}) onto "
+        f"{connection_info['host']}")
 
 def sftp_remove(file_path: str, connection_info: dict) -> None:
     """Removes the identified file."""
@@ -139,9 +151,10 @@ def sftp_remove(file_path: str, connection_info: dict) -> None:
     _make_known_hosts(connection_info)
     with pysftp.Connection(**connection_info) as sftp:
         sftp.remove(file_path)
-    prefect.context.get('logger').info(f"Removed file {file_path} from {connection_info['host']}")
+    prefect.context.get('logger').info(
+        f"SFTP: Removed file {file_path} from {connection_info['host']}")
 
-def sftp_list(folder_path: str, connection_info: dict) -> list:
+def sftp_list(connection_info: dict, folder_path="/") -> list[str]:
     """Returns a list of filenames for files in the given folder. Folders are not included."""
 
     _make_ssh_key(connection_info)
@@ -149,13 +162,27 @@ def sftp_list(folder_path: str, connection_info: dict) -> list:
     with pysftp.Connection(**connection_info) as sftp:
         out = [i for i in sftp.listdir_attr(folder_path) if stat.S_ISREG(i.st_mode)]
     prefect.context.get('logger').info(
-        f"Found {len(out)} files at {folder_path} on {connection_info['host']}")
+        f"SFTP: Found {len(out)} files at {folder_path} on {connection_info['host']}")
 
 
 # Minio functions
 
 def minio_get(object_name: str, connection_info: dict) -> bytes:
-    pass
+    """Returns the bytes content for the given object in a Minio bucket."""
+
+    if "secure" not in connection_info:
+        connection_info['secure'] = True
+    minio = Minio(**connection_info)
+    try:
+        response = minio.get_object(connection_info['bucket'], object_name)
+        out = response.read()
+        prefect.context.get('logger').info(
+            f'Minio: Got object {object_name} ({_sizeof_fmt(len(out))}) from '
+            f'bucket {connection_info["bucket"]} on {connection_info["endpoint"]}')
+        return out
+    finally:
+        response.close()
+        response.release_conn()
 
 def minio_put(binary_object: BinaryIO,
               object_name: str,
@@ -167,14 +194,35 @@ def minio_put(binary_object: BinaryIO,
     if "secure" not in connection_info:
         connection_info['secure'] = True
     minio = Minio(**connection_info)
+    length = binary_object.getbuffer().nbytes
     minio.put_object(bucket_name=connection_info['bucket'],
                      object_name=object_name,
                      data=binary_object,
-                     length=binary_object.getbuffer().nbytes,
+                     length=length,
                      **kwargs)
+    prefect.context.get('logger').info(
+        f'Minio: Put object {object_name} ({_sizeof_fmt(length)}) into '
+        f'bucket {connection_info["bucket"]} on {connection_info["endpoint"]}')
 
 def minio_remove(object_name: str, connection_info: dict) -> None:
-    pass
+    """Removes the identified object from a Minio bucket."""
 
-def minio_list(connection_info: dict, prefix_or_dir: str = None) -> list:
-    pass
+    if "secure" not in connection_info:
+        connection_info['secure'] = True
+    minio = Minio(**connection_info)
+    minio.remove(connection_info['bucket'], object_name)
+    prefect.context.get('logger').info(
+        f'Minio: Removed object {object_name} from '
+        f'bucket {connection_info["bucket"]} on {connection_info["endpoint"]}')
+
+def minio_list(connection_info: dict, prefix: str ="") -> list[str]:
+    """Returns a list of object names with the given prefix in a Minio bucket; non-recursive."""
+
+    if "secure" not in connection_info:
+        connection_info['secure'] = True
+    minio = Minio(**connection_info)
+    out = [i.object_name for i in minio.list_objects(connection_info['bucket'], prefix=prefix)]
+    prefect.context.get('logger').info(
+        f'Minio: Found {len(out)} files with prefix "{prefix}" in '
+        f'bucket {connection_info["bucket"]} on {connection_info["endpoint"]}')
+    return out
