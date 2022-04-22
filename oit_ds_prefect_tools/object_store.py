@@ -22,9 +22,11 @@ import stat
 
 import prefect
 from prefect import task
+from prefect.engine import signals
 import pandas as pd
 import pysftp
 from minio import Minio
+from minio.error import S3Error
 
 from . import util
 
@@ -53,13 +55,14 @@ def _switch(connection_info, **kwargs):
     raise ValueError(f'System type "{connection_info["system_type"]}" is not supported')
 
 @task
-def get(object_name: str, connection_info: dict) -> bytes:
-    """Returns the bytes content for the given file/object on the identified system."""
+def get(object_name: str, connection_info: dict, skip_if_missing: bool =False) -> bytes:
+    """Returns the bytes content for the given file/object on the identified system. If
+    skip_if_missing is True, this task will skip instead of fail if the object is missing."""
 
     function = _switch(connection_info,
                        sftp=sftp_get,
                        minio=minio_get)
-    function(object_name, connection_info)
+    function(object_name, connection_info, skip_if_missing)
 
 @task
 def put(binary_object: Union[BinaryIO, bytes],
@@ -145,14 +148,23 @@ def _make_known_hosts(connection_info):
         connection_info['cnopts'] = cnopts
         del connection_info['known_hosts']
 
-def sftp_get(file_path: str, connection_info: dict) -> bytes:
+def sftp_get(file_path: str, connection_info: dict, skip_if_missing: bool =False) -> bytes:
     """Returns the bytes content for the file at the given path from an SFTP server."""
 
     _make_ssh_key(connection_info)
     _make_known_hosts(connection_info)
     with pysftp.Connection(**connection_info) as sftp:
         out = io.BytesIO()
-        sftp.getfo(file_path, out)
+        try:
+            sftp.getfo(file_path, out)
+        except IOError as exc:
+            if skip_if_missing:
+                prefect.context.get('logger').info(
+                    f'Exception "{exc}" caught while getting {file_path} from '
+                    f'{connection_info["host"]}: skipping task instead of raising')
+                # pylint: disable=raise-missing-from
+                raise signals.SKIP()
+            raise
     out = out.getvalue()
     prefect.context.get('logger').info(
         f"SFTP: Got file {file_path} ({_sizeof_fmt(len(out))}) from {connection_info['host']}")
@@ -197,14 +209,24 @@ def sftp_list(connection_info: dict, folder_path="/") -> list[str]:
 
 # Minio functions
 
-def minio_get(object_name: str, connection_info: dict) -> bytes:
+def minio_get(object_name: str, connection_info: dict, skip_if_missing: bool =False) -> bytes:
     """Returns the bytes content for the given object in a Minio bucket."""
 
     if "secure" not in connection_info:
         connection_info['secure'] = True
     minio = Minio(**connection_info)
     try:
-        response = minio.get_object(connection_info['bucket'], object_name)
+        try:
+            response = minio.get_object(connection_info['bucket'], object_name)
+        except S3Error as err:
+            if err.code == 'NoSuchKey' and skip_if_missing:
+                prefect.context.get('logger').info(
+                    f'Exception "{err}" caught while getting {object_name} from bucket '
+                    f'{connection_info["bucket"]} on {connection_info["endpoint"]}: skipping task '
+                    f'instead of raising')
+                # pylint: disable=raise-missing-from
+                raise signals.SKIP()
+            raise
         out = response.read()
         prefect.context.get('logger').info(
             f'Minio: Got object {object_name} ({_sizeof_fmt(len(out))}) from '
