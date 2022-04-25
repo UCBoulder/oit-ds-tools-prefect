@@ -5,6 +5,7 @@ connect to. It should always have a "system_type" member identifying one of the 
 supported systems:
     - "sftp" for pysftp.Connection
     - "minio" for minio.Minio
+    - "s3" for boto3.session.Session
 
 The remaining KVs of connection_info should map directly to the keyword arguments used in calling
 the constructor indicated in the list above, with some exceptions:
@@ -27,6 +28,8 @@ import pandas as pd
 import pysftp
 from minio import Minio
 from minio.error import S3Error
+import boto3
+import botocore
 
 from . import util
 
@@ -61,7 +64,8 @@ def get(object_name: str, connection_info: dict, skip_if_missing: bool =False) -
 
     function = _switch(connection_info,
                        sftp=sftp_get,
-                       minio=minio_get)
+                       minio=minio_get,
+                       s3=s3_get)
     function(object_name, connection_info, skip_if_missing)
 
 @task
@@ -77,17 +81,20 @@ def put(binary_object: Union[BinaryIO, bytes],
         binary_object = io.BytesIO(binary_object)
     function = _switch(connection_info,
                        sftp=sftp_put,
-                       minio=minio_put)
+                       minio=minio_put,
+                       s3=s3_put)
     function(binary_object, object_name, connection_info, **kwargs)
 
 @task
-def remove(object_name: str, connection_info: dict) -> None:
-    """Removes the identified file/object."""
+def remove(object_name: str, connection_info: dict, **kwargs) -> None:
+    """Removes the identified file/object. Additional kwargs can be specified to, for example,
+    remove a particular version on certain systems."""
 
     function = _switch(connection_info,
                        sftp=sftp_remove,
-                       minio=minio_remove)
-    function(object_name, connection_info)
+                       minio=minio_remove,
+                       s3=s3_remove)
+    function(object_name, connection_info, **kwargs)
 
 @task
 def list_names(connection_info: dict, prefix_or_dir: str =None) -> list[str]:
@@ -96,7 +103,8 @@ def list_names(connection_info: dict, prefix_or_dir: str =None) -> list[str]:
 
     function = _switch(connection_info,
                        sftp=sftp_list,
-                       minio=minio_list)
+                       minio=minio_list,
+                       s3=s3_list)
     if prefix_or_dir:
         function(connection_info, prefix_or_dir)
     else:
@@ -219,6 +227,8 @@ def minio_get(object_name: str, connection_info: dict, skip_if_missing: bool =Fa
 
     if "secure" not in connection_info:
         connection_info['secure'] = True
+    bucket = connection_info['bucket']
+    del connection_info['bucket']
     minio = Minio(**connection_info)
     try:
         try:
@@ -227,7 +237,7 @@ def minio_get(object_name: str, connection_info: dict, skip_if_missing: bool =Fa
             if err.code == 'NoSuchKey' and skip_if_missing:
                 prefect.context.get('logger').info(
                     f'Exception "{err}" caught while getting {object_name} from bucket '
-                    f'{connection_info["bucket"]} on {connection_info["endpoint"]}: skipping task '
+                    f'{bucket} on {connection_info["endpoint"]}: skipping task '
                     f'instead of raising')
                 # pylint: disable=raise-missing-from
                 raise signals.SKIP()
@@ -235,7 +245,7 @@ def minio_get(object_name: str, connection_info: dict, skip_if_missing: bool =Fa
         out = response.read()
         prefect.context.get('logger').info(
             f'Minio: Got object {object_name} ({_sizeof_fmt(len(out))}) from '
-            f'bucket {connection_info["bucket"]} on {connection_info["endpoint"]}')
+            f'bucket {bucket} on {connection_info["endpoint"]}')
         return out
     finally:
         response.close()
@@ -250,6 +260,8 @@ def minio_put(binary_object: BinaryIO,
 
     if "secure" not in connection_info:
         connection_info['secure'] = True
+    bucket = connection_info['bucket']
+    del connection_info['bucket']
     minio = Minio(**connection_info)
     length = binary_object.getbuffer().nbytes
     minio.put_object(bucket_name=connection_info['bucket'],
@@ -259,27 +271,114 @@ def minio_put(binary_object: BinaryIO,
                      **kwargs)
     prefect.context.get('logger').info(
         f'Minio: Put object {object_name} ({_sizeof_fmt(length)}) into '
-        f'bucket {connection_info["bucket"]} on {connection_info["endpoint"]}')
+        f'bucket {bucket} on {connection_info["endpoint"]}')
 
 def minio_remove(object_name: str, connection_info: dict) -> None:
     """Removes the identified object from a Minio bucket."""
 
     if "secure" not in connection_info:
         connection_info['secure'] = True
+    bucket = connection_info['bucket']
+    del connection_info['bucket']
     minio = Minio(**connection_info)
-    minio.remove(connection_info['bucket'], object_name)
+    minio.remove_object(connection_info['bucket'], object_name)
     prefect.context.get('logger').info(
         f'Minio: Removed object {object_name} from '
-        f'bucket {connection_info["bucket"]} on {connection_info["endpoint"]}')
+        f'bucket {bucket} on {connection_info["endpoint"]}')
 
 def minio_list(connection_info: dict, prefix: str ="") -> list[str]:
     """Returns a list of object names with the given prefix in a Minio bucket; non-recursive."""
 
     if "secure" not in connection_info:
         connection_info['secure'] = True
+    bucket = connection_info['bucket']
+    del connection_info['bucket']
     minio = Minio(**connection_info)
     out = [i.object_name for i in minio.list_objects(connection_info['bucket'], prefix=prefix)]
     prefect.context.get('logger').info(
         f'Minio: Found {len(out)} files with prefix "{prefix}" in '
-        f'bucket {connection_info["bucket"]} on {connection_info["endpoint"]}')
+        f'bucket {bucket} on {connection_info["endpoint"]}')
+    return out
+
+
+# S3 functions
+
+def s3_get(object_key: str, connection_info: dict, skip_if_missing: bool =False) -> bytes:
+    """Returns the bytes content for the given object in an Amazon S3 bucket."""
+
+    bucket = connection_info['bucket']
+    del connection_info['bucket']
+    session = boto3.session.Session(**connection_info)
+    s3res = session.resource('s3')
+    obj = s3res.Object(connection_info['bucket'], object_key)
+    data = io.BytesIO()
+    try:
+        obj.download_fileobj(data)
+    except botocore.exceptions.ClientError as err:
+        if err.response['Error']['Code'] == '404' and skip_if_missing:
+            prefect.context.get('logger').info(
+                f'Exception "{err}" caught while getting {object_key} from bucket '
+                f'{bucket} on Amazon S3: skipping task instead of raising')
+            # pylint: disable=raise-missing-from
+            raise signals.SKIP()
+        raise
+    out = data.getvalue()
+    prefect.context.get('logger').info(
+        f'Amazon S3: Got object {object_key} ({_sizeof_fmt(len(out))}) from '
+        f'bucket {bucket}')
+    return out
+
+def s3_put(binary_object: BinaryIO,
+           object_key: str,
+           connection_info: dict,
+           ExtraArgs: dict =None) -> None:
+    """Puts the given BinaryIO object into an Amazon S3 bucket. The optional ExtraArgs parameter
+    is passed to upload_fileobj if provided."""
+
+    # pylint:disable=invalid-name
+    bucket = connection_info['bucket']
+    del connection_info['bucket']
+    session = boto3.session.Session(**connection_info)
+    s3res = session.resource('s3')
+    bucket = s3res.Bucket(connection_info['bucket'])
+    try:
+        bucket.load()
+    except botocore.exceptions.ClientError as err:
+        if err.response['Error']['Code'] == '404':
+            bucket.create()
+        else:
+            raise
+    bucket.upload_fileobj(binary_object, key=object_key, ExtraArgs=ExtraArgs)
+    prefect.context.get('logger').info(
+        f'Amazon S3: Put object {object_key} ({_sizeof_fmt(binary_object.getbuffer().nbytes)})'
+        f' into bucket {bucket}')
+
+def s3_remove(object_key: str, connection_info: dict, VersionId: str =None) -> None:
+    """Removes the identified object from an Amazon S3 bucket. The optional VersionId parameter
+    is passed to the delete method if provided (otherwise, the null version is deleted."""
+
+    # pylint:disable=invalid-name
+    bucket = connection_info['bucket']
+    del connection_info['bucket']
+    session = boto3.session.Session(**connection_info)
+    s3res = session.resource('s3')
+    obj = s3res.Object(connection_info['bucket'], object_key)
+    obj.delete(VersionId=VersionId)
+    prefect.context.get('logger').info(
+        f'Amazon S3: Removed object {object_key} from bucket {bucket}')
+
+def s3_list(connection_info: dict, Prefix: str ="") -> list[str]:
+    """Returns a list of object names with the given prefix in an Amazon S3 bucket; non-recursive.
+    """
+
+    # pylint:disable=invalid-name
+    bucket = connection_info['bucket']
+    del connection_info['bucket']
+    session = boto3.session.Session(**connection_info)
+    s3res = session.resource('s3')
+    bucket = s3res.Bucket(connection_info['bucket'])
+    out = [i.key for i in bucket.objects.filter(Prefix=Prefix)]
+    prefect.context.get('logger').info(
+        f'Amazon S3: Found {len(out)} files with prefix "{Prefix}" in '
+        f'bucket {bucket}')
     return out
