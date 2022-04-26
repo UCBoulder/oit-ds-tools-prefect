@@ -1,4 +1,4 @@
-# oit-ds-prefect-tools
+# Prefect Tools Package
 
 A package of functions and tasks to expedite development of Prefect data flows.
 
