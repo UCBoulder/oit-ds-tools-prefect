@@ -5,6 +5,7 @@ import cx_Oracle
 from prefect import task
 import pandas as pd
 
+from . import util
 
 # System-agnostic tasks
 
@@ -65,4 +66,5 @@ def oracle_sql_extract(sql_query: str, connection_info: dict) -> pd.DataFrame:
             raise
         raise
     prefect.context.get('logger').info(f"Read {len(data.index)} rows from {host}: {sql_snip}")
+    util.record_source('oracle', host, sum(data.memory_usage()))
     return data

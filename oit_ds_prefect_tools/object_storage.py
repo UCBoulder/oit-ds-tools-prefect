@@ -181,7 +181,8 @@ def sftp_get(file_path: str, connection_info: dict, skip_if_missing: bool =False
     out = out.getvalue()
     prefect.context.get('logger').info(
         f"SFTP: Got file {file_path} ({_sizeof_fmt(len(out))}) from {connection_info['host']}")
-    return out.getvalue()
+    util.record_source('sftp', connection_info['host'], len(out))
+    return out
 
 def sftp_put(file_object: BinaryIO, file_path: str, connection_info: dict, **kwargs) -> None:
     """Writes a file-like object or bytes string to the given path on an SFTP server. """
@@ -195,9 +196,11 @@ def sftp_put(file_object: BinaryIO, file_path: str, connection_info: dict, **kwa
         if not sftp.isdir(os.path.dirname(file_path)):
             sftp.makedirs(os.path.dirname(file_path))
             sftp.putfo(file_object, file_path)
+    size = file_object.get_buffer().nbytes
     prefect.context.get('logger').info(
-        f"SFTP: Put file {file_path} ({_sizeof_fmt(file_object.tell())}) onto "
+        f"SFTP: Put file {file_path} ({_sizeof_fmt(size)}) onto "
         f"{connection_info['host']}")
+    util.record_sink('sftp', connection_info['host'], size)
 
 def sftp_remove(file_path: str, connection_info: dict) -> None:
     """Removes the identified file."""
@@ -246,6 +249,7 @@ def minio_get(object_name: str, connection_info: dict, skip_if_missing: bool =Fa
         prefect.context.get('logger').info(
             f'Minio: Got object {object_name} ({_sizeof_fmt(len(out))}) from '
             f'bucket {bucket} on {connection_info["endpoint"]}')
+        util.record_source(f'minio: {connection_info["endpoint"]}', bucket, len(out))
         return out
     finally:
         response.close()
@@ -272,6 +276,7 @@ def minio_put(binary_object: BinaryIO,
     prefect.context.get('logger').info(
         f'Minio: Put object {object_name} ({_sizeof_fmt(length)}) into '
         f'bucket {bucket} on {connection_info["endpoint"]}')
+    util.record_sink(f'minio: {connection_info["endpoint"]}', bucket, length)
 
 def minio_remove(object_name: str, connection_info: dict) -> None:
     """Removes the identified object from a Minio bucket."""
@@ -326,6 +331,7 @@ def s3_get(object_key: str, connection_info: dict, skip_if_missing: bool =False)
     prefect.context.get('logger').info(
         f'Amazon S3: Got object {object_key} ({_sizeof_fmt(len(out))}) from '
         f'bucket {bucket}')
+    util.record_source('s3', bucket, len(out))
     return out
 
 def s3_put(binary_object: BinaryIO,
@@ -340,18 +346,20 @@ def s3_put(binary_object: BinaryIO,
     del connection_info['bucket']
     session = boto3.session.Session(**connection_info)
     s3res = session.resource('s3')
-    bucket = s3res.Bucket(connection_info['bucket'])
+    bucket_res = s3res.Bucket(connection_info['bucket'])
     try:
-        bucket.load()
+        bucket_res.load()
     except botocore.exceptions.ClientError as err:
         if err.response['Error']['Code'] == '404':
-            bucket.create()
+            bucket_res.create()
         else:
             raise
-    bucket.upload_fileobj(binary_object, key=object_key, ExtraArgs=ExtraArgs)
+    bucket_res.upload_fileobj(binary_object, key=object_key, ExtraArgs=ExtraArgs)
+    size = binary_object.getbuffer().nbytes
     prefect.context.get('logger').info(
-        f'Amazon S3: Put object {object_key} ({_sizeof_fmt(binary_object.getbuffer().nbytes)})'
+        f'Amazon S3: Put object {object_key} ({_sizeof_fmt(size)})'
         f' into bucket {bucket}')
+    util.record_sink('s3', bucket, size)
 
 def s3_remove(object_key: str, connection_info: dict, VersionId: str =None) -> None:
     """Removes the identified object from an Amazon S3 bucket. The optional VersionId parameter

@@ -11,6 +11,7 @@ from prefect.client import Secret
 from prefect import storage
 from prefect import backend
 from prefect.run_configs.docker import DockerRun
+from prefect.exceptions import ClientError
 import git
 
 def failure_notifier(smtp_info_keyname: str, contacts_param: str) -> Callable:
@@ -115,3 +116,46 @@ def reveal_secrets(config: dict) -> dict:
         else:
             out[key] = value
     return out
+
+def _get_flow_record(source_sink_records):
+    flow_name = prefect.context.get('flow_name')
+    if flow_name not in source_sink_records:
+        source_sink_records[flow_name] = {}
+    run_id = prefect.context.get('flow_run_id')
+    if run_id not in source_sink_records[flow_name]:
+        source_sink_records[flow_name][run_id] = {'sources':[], 'sinks': []}
+    return source_sink_records[flow_name][run_id]
+
+def record_source(source_type, source_name, num_bytes):
+    """Makes a record in Prefect Cloud that data was pulled from a source system within a Flow
+    context. Be sure to call this function if you ever write your own extraction task outside this
+    package."""
+
+    try:
+        records = backend.get_key_value('source_sink_records')
+    except ValueError:
+        records = {}
+    except ClientError:
+        # Not connected to Cloud: just do nothing
+        return
+    flow_record = _get_flow_record(records)
+    flow_record['sources'].append(
+        {'type': source_type, 'name': source_name, 'bytes': int(num_bytes)})
+    backend.set_key_value('source_sink_records', records)
+
+def record_sink(sink_type, sink_name, num_bytes):
+    """Makes a record in Prefect Cloud that data was pulled from a source system within a Flow
+    context. Be sure to call this function if you ever write your own extraction task outside this
+    package."""
+
+    try:
+        records = backend.get_key_value('source_sink_records')
+    except ValueError:
+        records = {}
+    except ClientError:
+        # Not connected to Cloud: just do nothing
+        return
+    flow_record = _get_flow_record(records)
+    flow_record['sinks'].append(
+        {'type': sink_type, 'name': sink_name, 'bytes': int(num_bytes)})
+    backend.set_key_value('source_sink_records', records)
