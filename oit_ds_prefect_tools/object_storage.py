@@ -97,16 +97,16 @@ def remove(object_name: str, connection_info: dict, **kwargs) -> None:
     function(object_name, connection_info, **kwargs)
 
 @task
-def list_names(connection_info: dict, prefix_or_dir: str =None) -> list[str]:
-    """Returns a list of object or file names in the given folder. Filters by object name prefix or
-    directory path depending on the system. Folders are not included; non-recursive."""
+def list_names(connection_info: dict, prefix: str =None) -> list[str]:
+    """Returns a list of object or file names in the given folder. Filters by object name prefix,
+    which includes directory path for file systems. Folders are not included; non-recursive."""
 
     function = _switch(connection_info,
                        sftp=sftp_list,
                        minio=minio_list,
                        s3=s3_list)
-    if prefix_or_dir:
-        function(connection_info, prefix_or_dir)
+    if prefix:
+        function(connection_info, prefix)
     else:
         function(connection_info)
 
@@ -212,15 +212,19 @@ def sftp_remove(file_path: str, connection_info: dict) -> None:
     prefect.context.get('logger').info(
         f"SFTP: Removed file {file_path} from {connection_info['host']}")
 
-def sftp_list(connection_info: dict, folder_path="/") -> list[str]:
+def sftp_list(connection_info: dict, file_prefix: str=".") -> list[str]:
     """Returns a list of filenames for files in the given folder. Folders are not included."""
 
     _make_ssh_key(connection_info)
     _make_known_hosts(connection_info)
+    directory = os.path.dirname(file_prefix)
+    prefix = os.path.basename(file_prefix)
     with pysftp.Connection(**connection_info) as sftp:
-        out = [i for i in sftp.listdir_attr(folder_path) if stat.S_ISREG(i.st_mode)]
+        out = [i.filename for i in sftp.listdir_attr(directory)
+               if stat.S_ISREG(i.st_mode) and i.filename.startswith(prefix)]
     prefect.context.get('logger').info(
-        f"SFTP: Found {len(out)} files at {folder_path} on {connection_info['host']}")
+        f"SFTP: Found {len(out)} files at '{directory}' with prefix '{prefix}' "
+        f"on {connection_info['host']}")
 
 
 # Minio functions
