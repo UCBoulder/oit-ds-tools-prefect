@@ -24,11 +24,11 @@ def failure_notifier(smtp_info_keyname: str, contacts_param: str) -> Callable:
     def send_notification(flow, state):
         def message(ptask):
             result = state.result.get(ptask)
-            if result:
+            if hasattr(result, 'message'):
                 return result.message
             return "not run"
         task_results = "\n".join([f'{i.name}: {message(i)}' for i in flow.sorted_tasks()])
-        body = f'this prefect flow has failed. task result messages:\n\n{task_results}'
+        body = f'This prefect flow has failed. Task result messages:\n\n{task_results}'
 
         smtp_info = get_config_value(smtp_info_keyname)
         contacts = prefect.context.get("parameters")[contacts_param]
