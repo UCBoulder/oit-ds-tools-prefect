@@ -22,11 +22,7 @@ def failure_notifier(smtp_info_keyname: str, contacts_param: str) -> Callable:
     named by contacts_param."""
 
     def send_notification(flow, state):
-        def stringify(task_state):
-            if task_state.result is not None:
-                return task_state.result
-            return "not run"
-        task_results = "\n".join([f'{t.name}: {stringify(s)}' for t, s in state.result])
+        task_results = "\n".join([f'{i.name}: {state.result[i].message}' for i in flow.get_tasks()])
         body = f'This prefect flow has failed. Task results:\n\n{task_results}'
 
         smtp_info = get_config_value(smtp_info_keyname)
