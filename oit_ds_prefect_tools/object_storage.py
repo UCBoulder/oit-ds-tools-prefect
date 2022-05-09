@@ -156,8 +156,14 @@ def _make_known_hosts(connection_info):
         known_hosts = util.get_config_value(connection_info['known_hosts'])
         with open("flow_known_hosts", 'w', encoding="ascii") as fileobj:
             fileobj.writelines(known_hosts)
-        cnopts = pysftp.CnOpts()
-        cnopts.hostkeys.load('flow_known_hosts')
+        try:
+            cnopts = pysftp.CnOpts()
+        except UnicodeDecodeError:
+            # On a local machine, default known hosts file may not be UTF-8 encoded
+            # In this case, only load the flow_known_hosts file
+            cnopts = pysftp.CnOpts('flow_known_hosts')
+        else:
+            cnopts.hostkeys.load('flow_known_hosts')
         connection_info['cnopts'] = cnopts
         del connection_info['known_hosts']
 
