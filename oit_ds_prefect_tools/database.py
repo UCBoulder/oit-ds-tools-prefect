@@ -10,14 +10,14 @@ from . import util
 
 # System-agnostic tasks
 
-@task
+@task(name="database.sql_extract")
 def sql_extract(sql_query: str, connection_info: dict) -> pd.DataFrame:
     """Returns a DataFrame derived from a SQL SELECT statement executed against the given
     database. Currently only Oracle databases are supported: see oracle_sql_extract for details."""
 
     return oracle_sql_extract(sql_query, connection_info)
 
-@task
+@task(name="database.insert")
 def insert(
         dataframe: pd.DataFrame,
         table_identifier: str,
