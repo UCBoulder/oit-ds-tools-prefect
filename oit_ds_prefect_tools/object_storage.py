@@ -51,7 +51,7 @@ def _sizeof_fmt(num):
     return f"{num:.1f} PB"
 
 def _switch(connection_info, **kwargs):
-    for key, value in kwargs:
+    for key, value in kwargs.items():
         if connection_info['system_type'] == key:
             del connection_info['system_type']
             return value
