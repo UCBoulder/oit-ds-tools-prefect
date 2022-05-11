@@ -23,8 +23,14 @@ def failure_notifier(smtp_info_keyname: str, contacts_param: str) -> Callable:
 
     def send_notification(flow, state):
         body = 'This prefect flow has failed. View logs in Prefect Cloud for more details.\n\n'
-        body += str(state.result)
-
+        body += f'Error message: {state.result}\n\n'
+        # Try to get task-specific details
+        try:
+            task_results = "\n".join([f'{k.name}: {v.message}' for k, v in state.result.items()])
+            if task_results:
+                body += f'\n\nTask results:\n\n{task_results}'
+        except AttributeError:
+            pass
         smtp_info = get_config_value(smtp_info_keyname)
         contacts = prefect.context.get("parameters")[contacts_param]
 
