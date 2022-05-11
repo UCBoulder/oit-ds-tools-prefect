@@ -13,9 +13,12 @@ from . import util
 @task(name="database.sql_extract")
 def sql_extract(sql_query: str, connection_info: dict) -> pd.DataFrame:
     """Returns a DataFrame derived from a SQL SELECT statement executed against the given
-    database. Currently only Oracle databases are supported: see oracle_sql_extract for details."""
+    database. Column names are automatically converted to lowercase. Currently only Oracle
+    databases are supported: see oracle_sql_extract for details."""
 
-    return oracle_sql_extract(sql_query, connection_info)
+    dataframe = oracle_sql_extract(sql_query, connection_info)
+    dataframe.columns = [i.lower() for i in dataframe.columns]
+    return dataframe
 
 @task(name="database.insert")
 def insert(
@@ -64,7 +67,7 @@ def oracle_sql_extract(sql_query: str, connection_info: dict) -> pd.DataFrame:
             host = conn.dsn.split('HOST=')[1].split(')')[0]
         except IndexError:
             host = 'UNKNOWN'
-        sql_snip = ' '.join(sql_query.split())[:50]
+        sql_snip = ' '.join(sql_query.split())[:100] + ' ...'
         try:
             data = pd.read_sql_query(sql_query, conn)
         except pd.io.sql.DatabaseError:
@@ -92,7 +95,7 @@ def oracle_insert(
         connection_info: dict,
         kill_and_fill: bool =False) -> pd.DataFrame:
     """Takes a dataframe and table identifier (schema.table) and inserts the data into that table.
-    If kill_and_fill is true, deletes all rows from thet able before inserting. Dataframe columns
+    If kill_and_fill is true, deletes all rows from the table before inserting. Dataframe columns
     must match table column names.
     """
 

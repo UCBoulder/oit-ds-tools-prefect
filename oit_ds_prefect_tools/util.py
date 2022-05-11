@@ -130,33 +130,35 @@ def _get_flow_record(source_sink_records):
 def record_source(source_type, source_name, num_bytes):
     """Makes a record in Prefect Cloud that data was pulled from a source system within a Flow
     context. Be sure to call this function if you ever write your own extraction task outside this
-    package."""
+    package. Does nothing if the flow's "env" param is not "prod"."""
 
-    try:
-        records = backend.get_key_value('source_sink_records')
-    except ValueError:
-        records = {}
-    except ClientError:
-        # Not connected to Cloud: just do nothing
-        return
-    flow_record = _get_flow_record(records)
-    flow_record['sources'].append(
-        {'type': source_type, 'name': source_name, 'bytes': int(num_bytes)})
-    backend.set_key_value('source_sink_records', records)
+    if prefect.context.get('parameters')['env'] == 'prod':
+        try:
+            records = backend.get_key_value('source_sink_records')
+        except ValueError:
+            records = {}
+        except ClientError:
+            # Not connected to Cloud: just do nothing
+            return
+        flow_record = _get_flow_record(records)
+        flow_record['sources'].append(
+            {'type': source_type, 'name': source_name, 'bytes': int(num_bytes)})
+        backend.set_key_value('source_sink_records', records)
 
 def record_sink(sink_type, sink_name, num_bytes):
     """Makes a record in Prefect Cloud that data was pulled from a source system within a Flow
     context. Be sure to call this function if you ever write your own extraction task outside this
-    package."""
+    package. Does nothing if the flow's "env" param is not "prod"."""
 
-    try:
-        records = backend.get_key_value('source_sink_records')
-    except ValueError:
-        records = {}
-    except ClientError:
-        # Not connected to Cloud: just do nothing
-        return
-    flow_record = _get_flow_record(records)
-    flow_record['sinks'].append(
-        {'type': sink_type, 'name': sink_name, 'bytes': int(num_bytes)})
-    backend.set_key_value('source_sink_records', records)
+    if prefect.context.get('parameters')['env'] == 'prod':
+        try:
+            records = backend.get_key_value('source_sink_records')
+        except ValueError:
+            records = {}
+        except ClientError:
+            # Not connected to Cloud: just do nothing
+            return
+        flow_record = _get_flow_record(records)
+        flow_record['sinks'].append(
+            {'type': sink_type, 'name': sink_name, 'bytes': int(num_bytes)})
+        backend.set_key_value('source_sink_records', records)
