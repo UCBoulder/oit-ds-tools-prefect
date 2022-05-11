@@ -201,7 +201,7 @@ def sftp_put(file_object: BinaryIO, file_path: str, connection_info: dict, **kwa
     with pysftp.Connection(**connection_info) as sftp:
         if not sftp.isdir(os.path.dirname(file_path)):
             sftp.makedirs(os.path.dirname(file_path))
-            sftp.putfo(file_object, file_path)
+        sftp.putfo(file_object, file_path)
     size = file_object.getbuffer().nbytes
     prefect.context.get('logger').info(
         f"SFTP: Put file {file_path} ({_sizeof_fmt(size)}) onto "
