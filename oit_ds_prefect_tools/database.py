@@ -25,7 +25,7 @@ def insert(
         dataframe: pd.DataFrame,
         table_identifier: str,
         connection_info: dict,
-        replace_existing: bool =False) -> pd.DataFrame:
+        kill_and_fill: bool =False) -> pd.DataFrame:
     """Takes a dataframe and table identifier (schema.table) and appends the data into that table.
     If kill_and_fill is true, deletes all rows from thet able before inserting. Dataframe columns
     must match table column names.
