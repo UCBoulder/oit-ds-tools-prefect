@@ -155,7 +155,7 @@ def _make_known_hosts(connection_info):
     if 'known_hosts' in connection_info:
         known_hosts = util.get_config_value(connection_info['known_hosts'])
         with open("flow_known_hosts", 'w', encoding="ascii") as fileobj:
-            fileobj.writelines(known_hosts)
+            fileobj.write('\n'.join(known_hosts))
         try:
             cnopts = pysftp.CnOpts()
         except UnicodeDecodeError:
