@@ -85,7 +85,6 @@ def oracle_sql_extract(sql_query: str, connection_info: dict) -> pd.DataFrame:
                     prefect.context.get('logger').error(
                         f'Oracle: Database error - {exc}\n{_sql_error(sql_query, offset)}')
                 raise
-            raise
     prefect.context.get('logger').info(
         f"Oracle: Read {len(data.index)} rows from {host}: {sql_snip}")
     util.record_source('oracle', host, sum(data.memory_usage()))
