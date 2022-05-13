@@ -73,7 +73,7 @@ def oracle_sql_extract(sql_query: str, connection_info: dict) -> pd.DataFrame:
         try:
             data = pd.read_sql_query(sql_query, conn)
         except pd.io.sql.DatabaseError:
-            # Can't get detailed error information from this, so reproduce with oracle library
+            # Get the line number of the error from the Oracle library
             try:
                 conn.cursor().execute(sql_query)
             except cx_Oracle.DatabaseError as exc:
@@ -84,7 +84,8 @@ def oracle_sql_extract(sql_query: str, connection_info: dict) -> pd.DataFrame:
                 else:
                     prefect.context.get('logger').error(
                         f'Oracle: Database error - {exc}\n{_sql_error(sql_query, offset)}')
-                raise
+            # Raise original exception
+            raise
     prefect.context.get('logger').info(
         f"Oracle: Read {len(data.index)} rows from {host}: {sql_snip}")
     util.record_source('oracle', host, sum(data.memory_usage()))
