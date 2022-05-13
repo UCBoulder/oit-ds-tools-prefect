@@ -67,7 +67,7 @@ def get(object_name: str, connection_info: dict, skip_if_missing: bool =False) -
                        sftp=sftp_get,
                        minio=minio_get,
                        s3=s3_get)
-    function(object_name, info, skip_if_missing)
+    return function(object_name, info, skip_if_missing)
 
 @task(name="object_storage.put")
 def put(binary_object: Union[BinaryIO, bytes],
@@ -111,9 +111,8 @@ def list_names(connection_info: dict, prefix: str =None) -> list[str]:
                        minio=minio_list,
                        s3=s3_list)
     if prefix:
-        function(info, prefix)
-    else:
-        function(info)
+        return function(info, prefix)
+    return function(info)
 
 @task(name="object_storage.store_dataframe")
 def store_dataframe(dataframe: pd.DataFrame, object_name: str, connection_info: dict) -> None:
