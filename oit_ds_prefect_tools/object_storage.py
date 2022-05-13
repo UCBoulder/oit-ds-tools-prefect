@@ -238,6 +238,7 @@ def sftp_list(connection_info: dict, file_prefix: str=".") -> list[str]:
     prefect.context.get('logger').info(
         f"SFTP: Found {len(out)} files at '{directory}' with prefix '{prefix}' "
         f"on {connection_info['host']}")
+    return out
 
 
 # Minio functions

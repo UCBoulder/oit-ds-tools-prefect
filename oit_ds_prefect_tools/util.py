@@ -33,7 +33,6 @@ def failure_notifier(smtp_info_keyname: str, contacts_param: str) -> Callable:
             pass
         smtp_info = get_config_value(smtp_info_keyname)
         contacts = prefect.context.get("parameters")[contacts_param]
-
         msg = MIMEMultipart()
         msg["from"] = smtp_info['from']
         msg["to"] = contacts
@@ -41,12 +40,19 @@ def failure_notifier(smtp_info_keyname: str, contacts_param: str) -> Callable:
                           f'{flow.name}: FAILURE')
         msg.attach(MIMEText(body))
 
-        prefect.context.get('logger').info(
-            f'Emailing failure notification to {contacts}:\nSUBJECT: {msg["subject"]}\n\n{body}')
-
-        mailserver = smtplib.SMTP(smtp_info['host'], smtp_info['port'])
-        mailserver.sendmail(smtp_info['from'].split(', '), contacts.split(', '), msg.as_string())
-        mailserver.quit()
+        if contacts:
+            prefect.context.get('logger').info(
+                f'Emailing failure notification to {contacts}:\n'
+                f'SUBJECT: {msg["subject"]}\n\n{body}')
+            mailserver = smtplib.SMTP(smtp_info['host'], smtp_info['port'])
+            mailserver.sendmail(smtp_info['from'].split(', '),
+                                contacts.split(', '),
+                                msg.as_string())
+            mailserver.quit()
+        else:
+            prefect.context.get('logger').info(
+                'No contacts set; logging notification instead of sending:\n'
+                f'SUBJECT: {msg["subject"]}\n\n{body}')
     return send_notification
 
 def run_local(flow, mode='run', argv=None, **kwargs):
