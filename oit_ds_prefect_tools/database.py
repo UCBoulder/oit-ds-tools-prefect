@@ -17,7 +17,9 @@ def sql_extract(sql_query: str, connection_info: dict) -> pd.DataFrame:
     databases are supported: see oracle_sql_extract for details."""
 
     info = connection_info.copy()
-    dataframe = oracle_sql_extract(sql_query, info)
+    function = _switch(info,
+                       oracle=oracle_sql_extract)
+    dataframe = function(sql_query, info)
     dataframe.columns = [i.lower() for i in dataframe.columns]
     return dataframe
 
@@ -33,12 +35,22 @@ def insert(
     """
 
     info = connection_info.copy()
-    return oracle_insert(dataframe, table_identifier, info, kill_and_fill)
+    function = _switch(info,
+                       oracle=oracle_insert)
+    return function(dataframe, table_identifier, info, kill_and_fill)
+
+def _switch(connection_info, **kwargs):
+    for key, value in kwargs.items():
+        if connection_info['system_type'] == key:
+            del connection_info['system_type']
+            return value
+    raise ValueError(f'System type "{connection_info["system_type"]}" is not supported')
 
 def _sql_error(sql_query, offset):
     line_no = len(sql_query[:offset].split('\n'))
     line = sql_query[:offset].split('\n')[-1] + '█' + sql_query[offset:].split('\n')[0]
     return f'Line {line_no}: {line[:100]}'
+
 
 # Oracle functions
 
@@ -70,10 +82,13 @@ def oracle_sql_extract(sql_query: str, connection_info: dict) -> pd.DataFrame:
         except IndexError:
             host = 'UNKNOWN'
         sql_snip = ' '.join(sql_query.split())[:100] + ' ...'
+        try_again = False
         try:
             data = pd.read_sql_query(sql_query, conn)
         except pd.io.sql.DatabaseError:
             # Get the line number of the error from the Oracle library
+            try_again = True
+        if try_again:
             try:
                 conn.cursor().execute(sql_query)
             except cx_Oracle.DatabaseError as exc:
@@ -84,8 +99,7 @@ def oracle_sql_extract(sql_query: str, connection_info: dict) -> pd.DataFrame:
                 else:
                     prefect.context.get('logger').error(
                         f'Oracle: Database error - {exc}\n{_sql_error(sql_query, offset)}')
-            # Raise original exception
-            raise
+                raise
     prefect.context.get('logger').info(
         f"Oracle: Read {len(data.index)} rows from {host}: {sql_snip}")
     util.record_source('oracle', host, sum(data.memory_usage()))
