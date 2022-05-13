@@ -16,7 +16,8 @@ def sql_extract(sql_query: str, connection_info: dict) -> pd.DataFrame:
     database. Column names are automatically converted to lowercase. Currently only Oracle
     databases are supported: see oracle_sql_extract for details."""
 
-    dataframe = oracle_sql_extract(sql_query, connection_info)
+    info = connection_info.copy()
+    dataframe = oracle_sql_extract(sql_query, info)
     dataframe.columns = [i.lower() for i in dataframe.columns]
     return dataframe
 
@@ -31,7 +32,8 @@ def insert(
     must match table column names.
     """
 
-    return oracle_insert(dataframe, table_identifier, connection_info, replace_existing)
+    info = connection_info.copy()
+    return oracle_insert(dataframe, table_identifier, info, kill_and_fill)
 
 def _sql_error(sql_query, offset):
     line_no = len(sql_query[:offset].split('\n'))

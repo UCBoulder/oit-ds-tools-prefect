@@ -62,11 +62,12 @@ def get(object_name: str, connection_info: dict, skip_if_missing: bool =False) -
     """Returns the bytes content for the given file/object on the identified system. If
     skip_if_missing is True, this task will skip instead of fail if the object is missing."""
 
-    function = _switch(connection_info,
+    info = connection_info.copy()
+    function = _switch(info,
                        sftp=sftp_get,
                        minio=minio_get,
                        s3=s3_get)
-    function(object_name, connection_info, skip_if_missing)
+    function(object_name, info, skip_if_missing)
 
 @task(name="object_storage.put")
 def put(binary_object: Union[BinaryIO, bytes],
@@ -77,38 +78,41 @@ def put(binary_object: Union[BinaryIO, bytes],
     system. Additional kwargs can be specified for metadata, tags, etc. when using object storage.
     """
 
+    info = connection_info.copy()
     if not hasattr(binary_object, 'read'):
         binary_object = io.BytesIO(binary_object)
-    function = _switch(connection_info,
+    function = _switch(info,
                        sftp=sftp_put,
                        minio=minio_put,
                        s3=s3_put)
-    function(binary_object, object_name, connection_info, **kwargs)
+    function(binary_object, object_name, info, **kwargs)
 
 @task(name="object_storage.remove")
 def remove(object_name: str, connection_info: dict, **kwargs) -> None:
     """Removes the identified file/object. Additional kwargs can be specified to, for example,
     remove a particular version on certain systems."""
 
-    function = _switch(connection_info,
+    info = connection_info.copy()
+    function = _switch(info,
                        sftp=sftp_remove,
                        minio=minio_remove,
                        s3=s3_remove)
-    function(object_name, connection_info, **kwargs)
+    function(object_name, info, **kwargs)
 
 @task(name="object_storage.list_names")
 def list_names(connection_info: dict, prefix: str =None) -> list[str]:
     """Returns a list of object or file names in the given folder. Filters by object name prefix,
     which includes directory path for file systems. Folders are not included; non-recursive."""
 
-    function = _switch(connection_info,
+    info = connection_info.copy()
+    function = _switch(info,
                        sftp=sftp_list,
                        minio=minio_list,
                        s3=s3_list)
     if prefix:
-        function(connection_info, prefix)
+        function(info, prefix)
     else:
-        function(connection_info)
+        function(info)
 
 @task(name="object_storage.store_dataframe")
 def store_dataframe(dataframe: pd.DataFrame, object_name: str, connection_info: dict) -> None:
@@ -116,14 +120,15 @@ def store_dataframe(dataframe: pd.DataFrame, object_name: str, connection_info: 
     should be considered opaque; reading the data should only be done with retrieve_dataframe.
     """
 
+    info = connection_info.copy()
     data = io.BytesIO()
     dataframe.to_parquet(data)
-    function = _switch(connection_info,
+    function = _switch(info,
                        sftp=sftp_put,
                        minio=minio_put)
     prefect.context.get('logger').info(
         f'Storing dataframe {object_name} with {len(dataframe.index)} rows in Parquet format')
-    function(data, f'{object_name}.parquet', connection_info)
+    function(data, f'{object_name}.parquet', info)
 
 @task(name="object_storage.retrieve_dataframe")
 def retrieve_dataframe(object_name: str, connection_info: dict) -> pd.DataFrame:
@@ -131,10 +136,11 @@ def retrieve_dataframe(object_name: str, connection_info: dict) -> pd.DataFrame:
     should be considered opaque; reading the data should only be done with retrieve_dataframe.
     """
 
-    function = _switch(connection_info,
+    info = connection_info.copy()
+    function = _switch(info,
                        sftp=sftp_get,
                        minio=minio_get)
-    contents = function(f'{object_name}.parquet', connection_info)
+    contents = function(f'{object_name}.parquet', info)
     data = io.BytesIO(contents)
     out = pd.read_parquet(data)
     prefect.context.get('logger').info(
