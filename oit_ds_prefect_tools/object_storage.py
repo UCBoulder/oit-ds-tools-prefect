@@ -81,6 +81,7 @@ def put(binary_object: Union[BinaryIO, bytes],
     info = connection_info.copy()
     if not hasattr(binary_object, 'read'):
         binary_object = io.BytesIO(binary_object)
+    binary_object.seek(0)
     function = _switch(info,
                        sftp=sftp_put,
                        minio=minio_put,
