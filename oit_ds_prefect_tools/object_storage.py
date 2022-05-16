@@ -252,7 +252,7 @@ def minio_get(object_name: str, connection_info: dict, skip_if_missing: bool =Fa
     minio = Minio(**connection_info)
     try:
         try:
-            response = minio.get_object(connection_info['bucket'], object_name)
+            response = minio.get_object(bucket object_name)
         except S3Error as err:
             if err.code == 'NoSuchKey' and skip_if_missing:
                 prefect.context.get('logger').info(
@@ -285,7 +285,7 @@ def minio_put(binary_object: BinaryIO,
     del connection_info['bucket']
     minio = Minio(**connection_info)
     length = binary_object.getbuffer().nbytes
-    minio.put_object(bucket_name=connection_info['bucket'],
+    minio.put_object(bucket_name=bucket,
                      object_name=object_name,
                      data=binary_object,
                      length=length,
@@ -303,7 +303,7 @@ def minio_remove(object_name: str, connection_info: dict) -> None:
     bucket = connection_info['bucket']
     del connection_info['bucket']
     minio = Minio(**connection_info)
-    minio.remove_object(connection_info['bucket'], object_name)
+    minio.remove_object(bucket, object_name)
     prefect.context.get('logger').info(
         f'Minio: Removed object {object_name} from '
         f'bucket {bucket} on {connection_info["endpoint"]}')
@@ -316,7 +316,7 @@ def minio_list(connection_info: dict, prefix: str ="") -> list[str]:
     bucket = connection_info['bucket']
     del connection_info['bucket']
     minio = Minio(**connection_info)
-    out = [i.object_name for i in minio.list_objects(connection_info['bucket'], prefix=prefix)]
+    out = [i.object_name for i in minio.list_objects(bucket, prefix=prefix)]
     prefect.context.get('logger').info(
         f'Minio: Found {len(out)} files with prefix "{prefix}" in '
         f'bucket {bucket} on {connection_info["endpoint"]}')
@@ -332,7 +332,7 @@ def s3_get(object_key: str, connection_info: dict, skip_if_missing: bool =False)
     del connection_info['bucket']
     session = boto3.session.Session(**connection_info)
     s3res = session.resource('s3')
-    obj = s3res.Object(connection_info['bucket'], object_key)
+    obj = s3res.Object(bucket, object_key)
     data = io.BytesIO()
     try:
         obj.download_fileobj(data)
@@ -363,7 +363,7 @@ def s3_put(binary_object: BinaryIO,
     del connection_info['bucket']
     session = boto3.session.Session(**connection_info)
     s3res = session.resource('s3')
-    bucket_res = s3res.Bucket(connection_info['bucket'])
+    bucket_res = s3res.Bucket(bucket)
     try:
         bucket_res.load()
     except botocore.exceptions.ClientError as err:
@@ -387,7 +387,7 @@ def s3_remove(object_key: str, connection_info: dict, VersionId: str =None) -> N
     del connection_info['bucket']
     session = boto3.session.Session(**connection_info)
     s3res = session.resource('s3')
-    obj = s3res.Object(connection_info['bucket'], object_key)
+    obj = s3res.Object(bucket, object_key)
     obj.delete(VersionId=VersionId)
     prefect.context.get('logger').info(
         f'Amazon S3: Removed object {object_key} from bucket {bucket}')
@@ -401,7 +401,7 @@ def s3_list(connection_info: dict, Prefix: str ="") -> list[str]:
     del connection_info['bucket']
     session = boto3.session.Session(**connection_info)
     s3res = session.resource('s3')
-    bucket = s3res.Bucket(connection_info['bucket'])
+    bucket = s3res.Bucket(bucket)
     out = [i.key for i in bucket.objects.filter(Prefix=Prefix)]
     prefect.context.get('logger').info(
         f'Amazon S3: Found {len(out)} files with prefix "{Prefix}" in '
