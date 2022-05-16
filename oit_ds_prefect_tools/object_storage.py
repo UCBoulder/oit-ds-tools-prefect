@@ -252,7 +252,7 @@ def minio_get(object_name: str, connection_info: dict, skip_if_missing: bool =Fa
     minio = Minio(**connection_info)
     try:
         try:
-            response = minio.get_object(bucket object_name)
+            response = minio.get_object(bucket, object_name)
         except S3Error as err:
             if err.code == 'NoSuchKey' and skip_if_missing:
                 prefect.context.get('logger').info(
