@@ -11,15 +11,16 @@ from . import util
 # System-agnostic tasks
 
 @task(name="database.sql_extract")
-def sql_extract(sql_query: str, connection_info: dict) -> pd.DataFrame:
+def sql_extract(sql_query: str, connection_info: dict, query_params=None) -> pd.DataFrame:
     """Returns a DataFrame derived from a SQL SELECT statement executed against the given
-    database. Column names are automatically converted to lowercase. Currently only Oracle
-    databases are supported: see oracle_sql_extract for details."""
+    database, with query_params specifying the values of bind variables. Column names are
+    automatically converted to lowercase. Currently only Oracle databases are supported: see
+    oracle_sql_extract for details."""
 
     info = connection_info.copy()
     function = _switch(info,
                        oracle=oracle_sql_extract)
-    dataframe = function(sql_query, info)
+    dataframe = function(sql_query, info, query_params)
     dataframe.columns = [i.lower() for i in dataframe.columns]
     return dataframe
 
@@ -66,13 +67,16 @@ def _make_oracle_dsn(connection_info):
         del connection_info['host']
         del connection_info['sid']
 
-def oracle_sql_extract(sql_query: str, connection_info: dict) -> pd.DataFrame:
+def oracle_sql_extract(sql_query: str, connection_info: dict, query_params=None) -> pd.DataFrame:
     """Returns a DataFrame derived from a SQL SELECT statement executed against the given
     database. The KVs of connection_info should match the keyword arguments passed to
     cx_Oracle.connect, with "dsn" being the "easy connection string" (see Oracle docs). Be sure to
     give the password as a separate field, not in the DSN. Or pass "host", "port", and "sid"
-    individually. Connection encoding is automatically set to utf-8 if missing."""
+    individually. Connection encoding is automatically set to utf-8 if missing. The query_params
+    argument specifies values for bind variables in the query."""
 
+    if query_params is None:
+        query_params = {}
     _make_oracle_dsn(connection_info)
     if 'encoding' not in connection_info:
         connection_info['encoding'] = 'UTF-8'
@@ -84,13 +88,13 @@ def oracle_sql_extract(sql_query: str, connection_info: dict) -> pd.DataFrame:
         sql_snip = ' '.join(sql_query.split())[:100] + ' ...'
         try_again = False
         try:
-            data = pd.read_sql_query(sql_query, conn)
+            data = pd.read_sql_query(sql_query, conn, params=query_params)
         except pd.io.sql.DatabaseError:
             # Get the line number of the error from the Oracle library
             try_again = True
         if try_again:
             try:
-                conn.cursor().execute(sql_query)
+                conn.cursor().execute(sql_query, parameters=query_params)
             except cx_Oracle.DatabaseError as exc:
                 try:
                     offset = exc.args[0].offset
