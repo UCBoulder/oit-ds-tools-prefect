@@ -29,11 +29,13 @@ def sql_extract(sql_query: str,
     """Returns a DataFrame derived from a SQL SELECT statement executed against the given
     database, with query_params specifying the values of bind variables, and lob_columns specifying
     any LOB-type columns which should have their `read` methods called to extract literal data.
-    Column names are automatically converted to lowercase."""
+    Column names are accepted and returned in lowercase."""
 
     info = connection_info.copy()
     function = _switch(info,
                        oracle=oracle_sql_extract)
+    if lob_columns:
+        lob_columns = [i.upper() for i in lob_columns]
     dataframe = function(sql_query, info, query_params, lob_columns)
     dataframe.columns = [i.lower() for i in dataframe.columns]
     return dataframe
