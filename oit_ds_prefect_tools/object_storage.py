@@ -250,9 +250,9 @@ def minio_get(object_name: str, connection_info: dict, skip_if_missing: bool =Fa
     bucket = connection_info['bucket']
     del connection_info['bucket']
     minio = Minio(**connection_info)
-    try:
         try:
             response = minio.get_object(bucket, object_name)
+            out = response.data
         except S3Error as err:
             if err.code == 'NoSuchKey' and skip_if_missing:
                 prefect.context.get('logger').info(
@@ -262,15 +262,14 @@ def minio_get(object_name: str, connection_info: dict, skip_if_missing: bool =Fa
                 # pylint: disable=raise-missing-from
                 raise signals.SKIP()
             raise
-        out = response.read()
+        finally:
+            response.close()
+            response.release_conn()
         prefect.context.get('logger').info(
             f'Minio: Got object {object_name} ({_sizeof_fmt(len(out))}) from '
             f'bucket {bucket} on {connection_info["endpoint"]}')
         util.record_source(f'minio: {connection_info["endpoint"]}', bucket, len(out))
         return out
-    finally:
-        response.close()
-        response.release_conn()
 
 def minio_put(binary_object: BinaryIO,
               object_name: str,
