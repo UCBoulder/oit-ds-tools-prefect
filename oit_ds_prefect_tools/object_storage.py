@@ -250,26 +250,26 @@ def minio_get(object_name: str, connection_info: dict, skip_if_missing: bool =Fa
     bucket = connection_info['bucket']
     del connection_info['bucket']
     minio = Minio(**connection_info)
-        try:
-            response = minio.get_object(bucket, object_name)
-            out = response.data
-        except S3Error as err:
-            if err.code == 'NoSuchKey' and skip_if_missing:
-                prefect.context.get('logger').info(
-                    f'Exception "{err}" caught while getting {object_name} from bucket '
-                    f'{bucket} on {connection_info["endpoint"]}: skipping task '
-                    f'instead of raising')
-                # pylint: disable=raise-missing-from
-                raise signals.SKIP()
-            raise
-        finally:
-            response.close()
-            response.release_conn()
-        prefect.context.get('logger').info(
-            f'Minio: Got object {object_name} ({_sizeof_fmt(len(out))}) from '
-            f'bucket {bucket} on {connection_info["endpoint"]}')
-        util.record_source(f'minio: {connection_info["endpoint"]}', bucket, len(out))
-        return out
+    try:
+        response = minio.get_object(bucket, object_name)
+        out = response.data
+    except S3Error as err:
+        if err.code == 'NoSuchKey' and skip_if_missing:
+            prefect.context.get('logger').info(
+                f'Exception "{err}" caught while getting {object_name} from bucket '
+                f'{bucket} on {connection_info["endpoint"]}: skipping task '
+                f'instead of raising')
+            # pylint: disable=raise-missing-from
+            raise signals.SKIP()
+        raise
+    finally:
+        response.close()
+        response.release_conn()
+    prefect.context.get('logger').info(
+        f'Minio: Got object {object_name} ({_sizeof_fmt(len(out))}) from '
+        f'bucket {bucket} on {connection_info["endpoint"]}')
+    util.record_source(f'minio: {connection_info["endpoint"]}', bucket, len(out))
+    return out
 
 def minio_put(binary_object: BinaryIO,
               object_name: str,
