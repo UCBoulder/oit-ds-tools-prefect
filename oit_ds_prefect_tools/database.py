@@ -1,4 +1,15 @@
-"""Tasks for connecting to databases"""
+"""Tasks for connecting to databases.
+
+Each Prefect task takes a connection_info argument which is a dict identifying the system to
+connect to. It should always have a "system_type" member identifying one of the following
+supported system:
+    - "oracle" for cx_Oracle.connect
+
+The remaining KVs of connection_info should map directly to the keyword arguments used in calling
+the constructor indicated in the list above, with some exceptions:
+    - For oracle, if your system uses an SID instead of a name, you cannot pass the easy connection
+        string as the "dsn" argument, so instead pass "host", "port", and "sid" individually.
+"""
 
 import prefect
 import cx_Oracle
@@ -11,16 +22,19 @@ from . import util
 # System-agnostic tasks
 
 @task(name="database.sql_extract")
-def sql_extract(sql_query: str, connection_info: dict, query_params=None) -> pd.DataFrame:
+def sql_extract(sql_query: str,
+                connection_info: dict,
+                query_params=None,
+                lob_columns: list =None) -> pd.DataFrame:
     """Returns a DataFrame derived from a SQL SELECT statement executed against the given
-    database, with query_params specifying the values of bind variables. Column names are
-    automatically converted to lowercase. Currently only Oracle databases are supported: see
-    oracle_sql_extract for details."""
+    database, with query_params specifying the values of bind variables, and lob_columns specifying
+    any LOB-type columns which should have their `read` methods called to extract literal data.
+    Column names are automatically converted to lowercase."""
 
     info = connection_info.copy()
     function = _switch(info,
                        oracle=oracle_sql_extract)
-    dataframe = function(sql_query, info, query_params)
+    dataframe = function(sql_query, info, query_params, lob_columns)
     dataframe.columns = [i.lower() for i in dataframe.columns]
     return dataframe
 
@@ -67,16 +81,19 @@ def _make_oracle_dsn(connection_info):
         del connection_info['host']
         del connection_info['sid']
 
-def oracle_sql_extract(sql_query: str, connection_info: dict, query_params=None) -> pd.DataFrame:
+def oracle_sql_extract(sql_query: str,
+                       connection_info: dict,
+                       query_params=None,
+                       lob_columns: list =None) -> pd.DataFrame:
     """Returns a DataFrame derived from a SQL SELECT statement executed against the given
-    database. The KVs of connection_info should match the keyword arguments passed to
-    cx_Oracle.connect, with "dsn" being the "easy connection string" (see Oracle docs). Be sure to
-    give the password as a separate field, not in the DSN. Or pass "host", "port", and "sid"
-    individually. Connection encoding is automatically set to utf-8 if missing. The query_params
-    argument specifies values for bind variables in the query."""
+    database. Connection encoding is automatically set to utf-8 if missing. The query_params
+    argument specifies values for bind variables in the query. The lob_columns argument specifies
+    LOB-type columns which should have their `read` methods called to extract literal data."""
 
     if query_params is None:
         query_params = {}
+    if lob_columns is None:
+        lob_columns = []
     _make_oracle_dsn(connection_info)
     if 'encoding' not in connection_info:
         connection_info['encoding'] = 'UTF-8'
@@ -104,8 +121,14 @@ def oracle_sql_extract(sql_query: str, connection_info: dict, query_params=None)
                     prefect.context.get('logger').error(
                         f'Oracle: Database error - {exc}\n{_sql_error(sql_query, offset)}')
                 raise
-    prefect.context.get('logger').info(
-        f"Oracle: Read {len(data.index)} rows from {host}: {sql_snip}")
+    log_str = f"Oracle: Read {len(data.index)} rows from {host}: {sql_snip}"
+    if query_params:
+        log_str += f'\nwith injected params: {query_params}'
+    prefect.context.get('logger').info(log_str)
+    for column in lob_columns:
+        prefect.context.get('logger').info(
+            f'Reading data from LOB column {column}')
+        data[column] = data[column].apply(lambda x: x.read())
     util.record_source('oracle', host, sum(data.memory_usage()))
     return data
 
