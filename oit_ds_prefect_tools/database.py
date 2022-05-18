@@ -124,14 +124,14 @@ def oracle_sql_extract(sql_query: str,
                     prefect.context.get('logger').error(
                         f'Oracle: Database error - {exc}\n{_sql_error(sql_query, offset)}')
                 raise
-    log_str = f"Oracle: Read {len(data.index)} rows from {host}: {sql_snip}"
-    if query_params:
-        log_str += f'\nwith injected params: {query_params}'
-    prefect.context.get('logger').info(log_str)
-    for column in lob_columns:
-        prefect.context.get('logger').info(
-            f'Reading data from LOB column {column}')
-        data[column] = data[column].apply(lambda x: x.read())
+        log_str = f"Oracle: Read {len(data.index)} rows from {host}: {sql_snip}"
+        if query_params:
+            log_str += f'\nwith injected params: {query_params}'
+        prefect.context.get('logger').info(log_str)
+        for column in lob_columns:
+            prefect.context.get('logger').info(
+                f'Reading data from LOB column {column}')
+            data[column] = data[column].apply(lambda x: x.read())
     util.record_source('oracle', host, sum(data.memory_usage()))
     return data
 
