@@ -162,7 +162,7 @@ def oracle_insert(
             host = 'UNKNOWN'
         with conn.cursor() as cursor:
             if kill_and_fill:
-                cursor.execute('TRUNCATE TABLE :table', [table_identifier])
+                cursor.execute(f'TRUNCATE TABLE {table_identifier}')
 
             # Insert records in batches
             for start in range(0, len(records), batch_size):
