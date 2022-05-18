@@ -14,6 +14,7 @@ the constructor indicated in the list above, with some exceptions:
 import prefect
 import cx_Oracle
 from prefect import task
+from prefect.engine import signals
 import pandas as pd
 import numpy as np
 
@@ -183,3 +184,5 @@ def oracle_insert(
     prefect.context.get('logger').info(
         f"Oracle: Inserted {len(records) - errors} rows into {table_identifier} on {host}")
     util.record_sink('oracle', host, sum(dataframe.memory_usage()))
+    if errors:
+        raise signals.FAIL(f'Failed to insert {errors} records')
