@@ -131,7 +131,7 @@ def oracle_sql_extract(sql_query: str,
         for column in lob_columns:
             prefect.context.get('logger').info(
                 f'Reading data from LOB column {column}')
-            data[column] = data[column].apply(lambda x: x.read())
+            data[column] = data[column].apply(lambda x: x.read() if x else None)
     util.record_source('oracle', host, sum(data.memory_usage()))
     return data
 
