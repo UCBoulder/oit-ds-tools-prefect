@@ -132,7 +132,7 @@ def oracle_sql_extract(sql_query: str,
             prefect.context.get('logger').info(
                 f'Reading data from LOB column {column}')
             data[column] = data[column].apply(lambda x: x.read() if x else None)
-    util.record_source('oracle', host, sum(data.memory_usage()))
+    util.record_pull('oracle', host, sum(data.memory_usage()))
     return data
 
 def oracle_insert(
@@ -183,6 +183,6 @@ def oracle_insert(
             f'Oracle: {errors - 10} more database errors while inserting not shown')
     prefect.context.get('logger').info(
         f"Oracle: Inserted {len(records) - errors} rows into {table_identifier} on {host}")
-    util.record_sink('oracle', host, sum(dataframe.memory_usage()))
+    util.record_push('oracle', host, sum(dataframe.memory_usage()))
     if errors:
         raise signals.FAIL(f'Failed to insert {errors} records')

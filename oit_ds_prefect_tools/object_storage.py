@@ -3,15 +3,17 @@
 Each Prefect task takes a connection_info parameter which is a dict identifying the system to
 connect to. It should always have a "system_type" member identifying one of the following
 supported systems:
-    - "sftp" for pysftp.Connection
+    - "sftp" for paramiko.client.SSHClient.connect
     - "minio" for minio.Minio
     - "s3" for boto3.session.Session
 
 The remaining KVs of connection_info should map directly to the keyword arguments used in calling
 the constructor indicated in the list above, with some exceptions:
-    - For sftp, the private_key arg should instead contain the key file's contents. You can also
-        supply a known_hosts arg indicating a Prefect KV Store key whose value is a list of lines
-        from a known_hosts file to use to populate the cnopts argument.
+    - For sftp, the pkey arg can just contain the key itself as a string (you can also supply a
+        pkey_password arg). Will try all supported key types until it finds the one that works.
+        You can also supply a known_hosts arg indicating a Prefect KV Store key whose value is a
+        list of lines from a known_hosts file to use in invoking the SSHClient.load_host_keys
+        function.
     - For minio, must include an additional "bucket" argument for the bucket name. Also, if
         "secure" is omitted, it defaults to True.
 """
@@ -25,7 +27,12 @@ import prefect
 from prefect import task
 from prefect.engine import signals
 import pandas as pd
-import pysftp
+from paramiko.client import SSHClient
+from paramiko.dsskey import DSSKey
+from paramiko.rsakey import RSAKey
+from paramiko.ecdsakey import ECDSAKey
+from paramiko.ed25519key import Ed25519Key
+from paramiko.ssh_exception import SSHException
 from minio import Minio
 from minio.error import S3Error
 import boto3
@@ -151,34 +158,63 @@ def retrieve_dataframe(object_name: str, connection_info: dict) -> pd.DataFrame:
 # SFTP functions
 
 def _make_ssh_key(connection_info):
-    if 'private_key' in connection_info:
-        filename = f"{connection_info['username']}_at_{connection_info['host']}_key"
-        with open(filename, 'w', encoding='ascii') as fileobj:
-            fileobj.write(connection_info['private_key'])
-        connection_info['private_key'] = filename
+    if 'pkey' in connection_info:
+        if 'pkey_password' in connection_info:
+            password = connection_info['pkey_password']
+            del connection_info['pkey_password']
+        else:
+            password = None
+        for key_type in [Ed25519Key, ECDSAKey, RSAKey, DSSKey]:
+            try:
+                pkey = key_type.from_private_key(
+                    io.StringIO(connection_info['pkey']),
+                    password)
+                prefect.context.get('logger').info(
+                    f'SFTP: Loaded SSH private key using class {key_type}')
+                connection_info['pkey'] = pkey
+                return
+            except SSHException:
+                pass
+        raise ValueError('connection_info["pkey"] could not be loaded using any Paramiko private '
+                         'key class: Verify this value gives the contents of a valid private key '
+                         'file and the password in connection_info["pkey_password"] (if applicable)'
+                         ' is correct')
 
-def _make_known_hosts(connection_info):
+def _load_known_hosts(ssh_client, connection_info):
     if 'known_hosts' in connection_info:
         known_hosts = util.get_config_value(connection_info['known_hosts'])
         with open("flow_known_hosts", 'w', encoding="ascii") as fileobj:
             fileobj.write('\n'.join(known_hosts))
-        try:
-            cnopts = pysftp.CnOpts()
-        except UnicodeDecodeError:
-            # On a local machine, default known hosts file may not be UTF-8 encoded
-            # In this case, only load the flow_known_hosts file
-            cnopts = pysftp.CnOpts('flow_known_hosts')
-        else:
-            cnopts.hostkeys.load('flow_known_hosts')
-        connection_info['cnopts'] = cnopts
+        ssh_client.load_host_keys(known_hosts)
         del connection_info['known_hosts']
+    else:
+        ssh_client.load_system_host_keys()
+
+def _chdir(sftp, remote_directory):
+    if remote_directory == '/':
+        # absolute path so change directory to root
+        sftp.chdir('/')
+        return
+    if remote_directory == '':
+        # top-level relative directory must exist
+        return
+    try:
+        sftp.chdir(remote_directory) # sub-directory exists
+    except IOError:
+        dirname, basename = os.path.split(remote_directory.rstrip('/'))
+        _chdir(sftp, dirname) # make parent directories
+        sftp.mkdir(basename) # sub-directory missing, so created it
+        sftp.chdir(basename)
 
 def sftp_get(file_path: str, connection_info: dict, skip_if_missing: bool =False) -> bytes:
     """Returns the bytes content for the file at the given path from an SFTP server."""
 
     _make_ssh_key(connection_info)
-    _make_known_hosts(connection_info)
-    with pysftp.Connection(**connection_info) as sftp:
+    ssh = SSHClient()
+    _load_known_hosts(ssh, connection_info)
+    try:
+        ssh.connect(**connection_info)
+        sftp = ssh.open_sftp()
         out = io.BytesIO()
         try:
             sftp.getfo(file_path, out)
@@ -186,14 +222,17 @@ def sftp_get(file_path: str, connection_info: dict, skip_if_missing: bool =False
             if skip_if_missing:
                 prefect.context.get('logger').info(
                     f'Exception "{exc}" caught while getting {file_path} from '
-                    f'{connection_info["host"]}: skipping task instead of raising')
+                    f'{connection_info["hostname"]}: skipping task instead of raising')
                 # pylint: disable=raise-missing-from
                 raise signals.SKIP()
             raise
-    out = out.getvalue()
+        out = out.getvalue()
+    finally:
+        if ssh:
+            ssh.close()
     prefect.context.get('logger').info(
-        f"SFTP: Got file {file_path} ({_sizeof_fmt(len(out))}) from {connection_info['host']}")
-    util.record_source('sftp', connection_info['host'], len(out))
+        f"SFTP: Got file {file_path} ({_sizeof_fmt(len(out))}) from {connection_info['hostname']}")
+    util.record_pull('sftp', connection_info['hostname'], len(out))
     return out
 
 def sftp_put(file_object: BinaryIO, file_path: str, connection_info: dict, **kwargs) -> None:
@@ -203,40 +242,57 @@ def sftp_put(file_object: BinaryIO, file_path: str, connection_info: dict, **kwa
         prefect.context.get('logger').warning(
             f'Additional kwargs not supported by SFTP: {kwargs.keys()}')
     _make_ssh_key(connection_info)
-    _make_known_hosts(connection_info)
-    with pysftp.Connection(**connection_info) as sftp:
-        if not sftp.isdir(os.path.dirname(file_path)):
-            sftp.makedirs(os.path.dirname(file_path))
-        sftp.putfo(file_object, file_path)
+    ssh = SSHClient()
+    _load_known_hosts(ssh, connection_info)
+    try:
+        ssh.connect(**connection_info)
+        sftp = ssh.open_sftp()
+        _chdir(sftp, os.path.dirname(file_path))
+        sftp.putfo(file_object, os.path.basename(file_path))
+    finally:
+        if ssh:
+            ssh.close()
     size = file_object.getbuffer().nbytes
     prefect.context.get('logger').info(
         f"SFTP: Put file {file_path} ({_sizeof_fmt(size)}) onto "
-        f"{connection_info['host']}")
-    util.record_sink('sftp', connection_info['host'], size)
+        f"{connection_info['hostname']}")
+    util.record_push('sftp', connection_info['hostname'], size)
 
 def sftp_remove(file_path: str, connection_info: dict) -> None:
     """Removes the identified file."""
 
     _make_ssh_key(connection_info)
-    _make_known_hosts(connection_info)
-    with pysftp.Connection(**connection_info) as sftp:
+    try:
+        ssh = SSHClient()
+        _load_known_hosts(ssh, connection_info)
+        ssh.connect(**connection_info)
+        sftp = ssh.open_sftp()
         sftp.remove(file_path)
+    finally:
+        if ssh:
+            ssh.close()
     prefect.context.get('logger').info(
-        f"SFTP: Removed file {file_path} from {connection_info['host']}")
+        f"SFTP: Removed file {file_path} from {connection_info['hostname']}")
 
 def sftp_list(connection_info: dict, file_prefix: str=".") -> list[str]:
     """Returns a list of filenames for files in the given folder. Folders are not included."""
 
-    _make_ssh_key(connection_info)
-    _make_known_hosts(connection_info)
     directory = os.path.dirname(file_prefix)
     prefix = os.path.basename(file_prefix)
-    with pysftp.Connection(**connection_info) as sftp:
+    _make_ssh_key(connection_info)
+    try:
+        ssh = SSHClient()
+        _load_known_hosts(ssh, connection_info)
+        ssh.connect(**connection_info)
+        sftp = ssh.open_sftp()
         out = [i.filename for i in sftp.listdir_attr(directory)
                if stat.S_ISREG(i.st_mode) and i.filename.startswith(prefix)]
+    finally:
+        if ssh:
+            ssh.close()
     prefect.context.get('logger').info(
         f"SFTP: Found {len(out)} files at '{directory}' with prefix '{prefix}' "
-        f"on {connection_info['host']}")
+        f"on {connection_info['hostname']}")
     return out
 
 
@@ -268,7 +324,7 @@ def minio_get(object_name: str, connection_info: dict, skip_if_missing: bool =Fa
     prefect.context.get('logger').info(
         f'Minio: Got object {object_name} ({_sizeof_fmt(len(out))}) from '
         f'bucket {bucket} on {connection_info["endpoint"]}')
-    util.record_source(f'minio: {connection_info["endpoint"]}', bucket, len(out))
+    util.record_pull(f'minio: {connection_info["endpoint"]}', bucket, len(out))
     return out
 
 def minio_put(binary_object: BinaryIO,
@@ -292,7 +348,7 @@ def minio_put(binary_object: BinaryIO,
     prefect.context.get('logger').info(
         f'Minio: Put object {object_name} ({_sizeof_fmt(length)}) into '
         f'bucket {bucket} on {connection_info["endpoint"]}')
-    util.record_sink(f'minio: {connection_info["endpoint"]}', bucket, length)
+    util.record_push(f'minio: {connection_info["endpoint"]}', bucket, length)
 
 def minio_remove(object_name: str, connection_info: dict) -> None:
     """Removes the identified object from a Minio bucket."""
@@ -347,7 +403,7 @@ def s3_get(object_key: str, connection_info: dict, skip_if_missing: bool =False)
     prefect.context.get('logger').info(
         f'Amazon S3: Got object {object_key} ({_sizeof_fmt(len(out))}) from '
         f'bucket {bucket}')
-    util.record_source('s3', bucket, len(out))
+    util.record_pull('s3', bucket, len(out))
     return out
 
 def s3_put(binary_object: BinaryIO,
@@ -375,7 +431,7 @@ def s3_put(binary_object: BinaryIO,
     prefect.context.get('logger').info(
         f'Amazon S3: Put object {object_key} ({_sizeof_fmt(size)})'
         f' into bucket {bucket}')
-    util.record_sink('s3', bucket, size)
+    util.record_push('s3', bucket, size)
 
 def s3_remove(object_key: str, connection_info: dict, VersionId: str =None) -> None:
     """Removes the identified object from an Amazon S3 bucket. The optional VersionId parameter

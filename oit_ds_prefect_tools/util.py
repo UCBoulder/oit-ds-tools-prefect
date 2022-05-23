@@ -2,9 +2,11 @@
 
 import os
 import smtplib
+import traceback
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Callable
+from datetime import datetime
 
 import prefect
 from prefect.client import Secret
@@ -133,7 +135,7 @@ def _get_flow_record(source_sink_records):
         source_sink_records[flow_name][run_id] = {'sources':[], 'sinks': []}
     return source_sink_records[flow_name][run_id]
 
-def record_source(source_type, source_name, num_bytes):
+def record_pull(source_type, source_name, num_bytes):
     """Makes a record in Prefect Cloud that data was pulled from a source system within a Flow
     context. Be sure to call this function if you ever write your own extraction task outside this
     package. Does nothing if the flow's "env" param is not "prod"."""
@@ -142,17 +144,20 @@ def record_source(source_type, source_name, num_bytes):
         try:
             records = backend.get_key_value('source_sink_records')
         except ValueError:
-            records = {}
+            records = []
         except ClientError:
             # Not connected to Cloud: just do nothing
             return
-        flow_record = _get_flow_record(records)
-        flow_record['sources'].append(
-            {'type': source_type, 'name': source_name, 'bytes': int(num_bytes)})
-        backend.set_key_value('source_sink_records', records)
+        records.append(['pull', source_type, source_name, datetime.now(), int(num_bytes)])
+        try:
+            backend.set_key_value('source_sink_records', records)
+            return
+        except ValueError:
+            prefect.context.get('logger').warn(
+                f'Exception while recording source data pull:\n{traceback.format_exc()}')
 
-def record_sink(sink_type, sink_name, num_bytes):
-    """Makes a record in Prefect Cloud that data was pulled from a source system within a Flow
+def record_push(sink_type, sink_name, num_bytes):
+    """Makes a record in Prefect Cloud that data was pushed to a sink system within a Flow
     context. Be sure to call this function if you ever write your own extraction task outside this
     package. Does nothing if the flow's "env" param is not "prod"."""
 
@@ -160,11 +165,13 @@ def record_sink(sink_type, sink_name, num_bytes):
         try:
             records = backend.get_key_value('source_sink_records')
         except ValueError:
-            records = {}
+            records = []
         except ClientError:
             # Not connected to Cloud: just do nothing
             return
-        flow_record = _get_flow_record(records)
-        flow_record['sinks'].append(
-            {'type': sink_type, 'name': sink_name, 'bytes': int(num_bytes)})
-        backend.set_key_value('source_sink_records', records)
+        records.append(['push', sink_type, sink_name, datetime.now(), int(num_bytes)])
+        try:
+            backend.set_key_value('source_sink_records', records)
+        except ValueError:
+            prefect.context.get('logger').warn(
+                f'Exception while recording sink data push:\n{traceback.format_exc()}')
