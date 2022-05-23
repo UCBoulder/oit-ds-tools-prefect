@@ -148,7 +148,8 @@ def record_pull(source_type, source_name, num_bytes):
         except ClientError:
             # Not connected to Cloud: just do nothing
             return
-        records.append(['pull', source_type, source_name, datetime.now(), int(num_bytes)])
+        records.append(
+            ['pull', source_type, source_name, datetime.now().isoformat(), int(num_bytes)])
         try:
             kv_store.set_key_value('source_sink_records', records)
             return
@@ -169,7 +170,7 @@ def record_push(sink_type, sink_name, num_bytes):
         except ClientError:
             # Not connected to Cloud: just do nothing
             return
-        records.append(['push', sink_type, sink_name, datetime.now(), int(num_bytes)])
+        records.append(['push', sink_type, sink_name, datetime.now().isoformat(), int(num_bytes)])
         try:
             kv_store.set_key_value('source_sink_records', records)
         except ValueError:
