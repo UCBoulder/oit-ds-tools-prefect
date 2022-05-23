@@ -11,7 +11,7 @@ from datetime import datetime
 import prefect
 from prefect.client import Secret
 from prefect import storage
-from prefect import backend
+from prefect.backend import kv_store
 from prefect.run_configs.docker import DockerRun
 from prefect.exceptions import ClientError
 import git
@@ -102,7 +102,7 @@ def get_config_value(key: str):
     except KeyError:
         prefect.context.get('logger').info(
             f'Extracting value for "{key}" from KV Store since it is not set in Flow Context')
-        return backend.get_key_value(key)
+        return kv_store.get_key_value(key)
 
 def reveal_secrets(config: dict) -> dict:
     """Looks for <secret> values and replaces these with Secret values from Prefect"""
@@ -142,7 +142,7 @@ def record_pull(source_type, source_name, num_bytes):
 
     if prefect.context.get('parameters')['env'] == 'prod':
         try:
-            records = backend.get_key_value('source_sink_records')
+            records = kv_store.get_key_value('source_sink_records')
         except ValueError:
             records = []
         except ClientError:
@@ -150,7 +150,7 @@ def record_pull(source_type, source_name, num_bytes):
             return
         records.append(['pull', source_type, source_name, datetime.now(), int(num_bytes)])
         try:
-            backend.set_key_value('source_sink_records', records)
+            kv_store.set_key_value('source_sink_records', records)
             return
         except ValueError:
             prefect.context.get('logger').warn(
@@ -163,7 +163,7 @@ def record_push(sink_type, sink_name, num_bytes):
 
     if prefect.context.get('parameters')['env'] == 'prod':
         try:
-            records = backend.get_key_value('source_sink_records')
+            records = kv_store.get_key_value('source_sink_records')
         except ValueError:
             records = []
         except ClientError:
@@ -171,7 +171,7 @@ def record_push(sink_type, sink_name, num_bytes):
             return
         records.append(['push', sink_type, sink_name, datetime.now(), int(num_bytes)])
         try:
-            backend.set_key_value('source_sink_records', records)
+            kv_store.set_key_value('source_sink_records', records)
         except ValueError:
             prefect.context.get('logger').warn(
                 f'Exception while recording sink data push:\n{traceback.format_exc()}')

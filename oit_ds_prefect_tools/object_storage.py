@@ -187,6 +187,8 @@ def _load_known_hosts(ssh_client, connection_info):
             fileobj.write('\n'.join(known_hosts))
         ssh_client.load_host_keys(known_hosts)
         del connection_info['known_hosts']
+        if 'look_for_keys' not in connection_info:
+            connection_info['look_for_keys'] = False
     else:
         ssh_client.load_system_host_keys()
 
