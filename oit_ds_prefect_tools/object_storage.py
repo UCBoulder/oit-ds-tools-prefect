@@ -130,8 +130,7 @@ def store_dataframe(dataframe: pd.DataFrame, object_name: str, connection_info: 
     """
 
     info = connection_info.copy()
-    data = io.BytesIO()
-    dataframe.to_parquet(data)
+    data = io.BytesIO(dataframe.to_parquet())
     function = _switch(info,
                        sftp=sftp_put,
                        minio=minio_put)
@@ -320,8 +319,12 @@ def minio_get(object_name: str, connection_info: dict, skip_if_missing: bool =Fa
             raise signals.SKIP()
         raise
     finally:
-        response.close()
-        response.release_conn()
+        try:
+            response.close()
+            response.release_conn()
+        except NameError:
+            # response never got defined
+            pass
     prefect.context.get('logger').info(
         f'Minio: Got object {object_name} ({_sizeof_fmt(len(out))}) from '
         f'bucket {bucket} on {connection_info["endpoint"]}')
