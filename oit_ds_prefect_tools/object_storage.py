@@ -215,16 +215,21 @@ def _sftp_chdir(sftp, remote_directory):
 def _sftp_connection(ssh_client, connection_info):
     stream = io.StringIO()
     handler = logging.StreamHandler(stream)
+    logger = logging.getLogger("paramiko")
+    level = logger.level
     try:
-        logging.getLogger("paramiko").addHandler(handler)
+        logger.addHandler(handler)
+        logger.setLevel(logging.DEBUG)
         ssh_client.connect(**connection_info)
         yield ssh_client.open_sftp()
     except AuthenticationException:
         prefect.context.get('logger').error(
             "Paramiko SSH Authentication failed. You may need to specify 'disabled_algorithms'. "
             f'See logs:\n\n{stream.getvalue()}')
+        raise
     finally:
-        logging.getLogger("paramiko").removeHandler(handler)
+        logger.removeHandler(handler)
+        logger.setLevel(level)
         if ssh_client:
             ssh_client.close()
 
