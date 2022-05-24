@@ -22,6 +22,8 @@ import io
 from typing import BinaryIO, Union
 import os
 import stat
+import logging
+from contextlib import contextmanager
 
 import prefect
 from prefect import task
@@ -32,7 +34,7 @@ from paramiko.dsskey import DSSKey
 from paramiko.rsakey import RSAKey
 from paramiko.ecdsakey import ECDSAKey
 from paramiko.ed25519key import Ed25519Key
-from paramiko.ssh_exception import SSHException
+from paramiko.ssh_exception import SSHException, AuthenticationException
 from minio import Minio
 from minio.error import S3Error
 import boto3
@@ -192,7 +194,7 @@ def _load_known_hosts(ssh_client, connection_info):
     else:
         ssh_client.load_system_host_keys()
 
-def _chdir(sftp, remote_directory):
+def _sftp_chdir(sftp, remote_directory):
     if remote_directory == '/':
         # absolute path so change directory to root
         sftp.chdir('/')
@@ -204,9 +206,26 @@ def _chdir(sftp, remote_directory):
         sftp.chdir(remote_directory) # sub-directory exists
     except IOError:
         dirname, basename = os.path.split(remote_directory.rstrip('/'))
-        _chdir(sftp, dirname) # make parent directories
+        _sftp_chdir(sftp, dirname) # make parent directories
         sftp.mkdir(basename) # sub-directory missing, so created it
         sftp.chdir(basename)
+
+@contextmanager
+def _sftp_connection(ssh_client, connection_info):
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    try:
+        logging.getLogger("paramiko").addHandler(handler)
+        ssh_client.connect(**connection_info)
+        yield ssh_client.open_sftp()
+    except AuthenticationException:
+        prefect.context.get('logger').error(
+            "Paramiko SSH Authentication failed. You may need to specify 'disabled_algorithms'. "
+            f'See logs:\n\n{stream.getvalue()}')
+    finally:
+        logging.getLogger("paramiko").removeHandler(handler)
+        if ssh_client:
+            ssh_client.close()
 
 def sftp_get(file_path: str, connection_info: dict, skip_if_missing: bool =False) -> bytes:
     """Returns the bytes content for the file at the given path from an SFTP server."""
@@ -214,9 +233,7 @@ def sftp_get(file_path: str, connection_info: dict, skip_if_missing: bool =False
     _make_ssh_key(connection_info)
     ssh = SSHClient()
     _load_known_hosts(ssh, connection_info)
-    try:
-        ssh.connect(**connection_info)
-        sftp = ssh.open_sftp()
+    with _sftp_connection(ssh, connection_info) as sftp:
         out = io.BytesIO()
         try:
             sftp.getfo(file_path, out)
@@ -229,9 +246,6 @@ def sftp_get(file_path: str, connection_info: dict, skip_if_missing: bool =False
                 raise signals.SKIP()
             raise
         out = out.getvalue()
-    finally:
-        if ssh:
-            ssh.close()
     prefect.context.get('logger').info(
         f"SFTP: Got file {file_path} ({_sizeof_fmt(len(out))}) from {connection_info['hostname']}")
     util.record_pull('sftp', connection_info['hostname'], len(out))
@@ -246,14 +260,9 @@ def sftp_put(file_object: BinaryIO, file_path: str, connection_info: dict, **kwa
     _make_ssh_key(connection_info)
     ssh = SSHClient()
     _load_known_hosts(ssh, connection_info)
-    try:
-        ssh.connect(**connection_info)
-        sftp = ssh.open_sftp()
-        _chdir(sftp, os.path.dirname(file_path))
+    with _sftp_connection(ssh, connection_info) as sftp:
+        _sftp_chdir(sftp, os.path.dirname(file_path))
         sftp.putfo(file_object, os.path.basename(file_path))
-    finally:
-        if ssh:
-            ssh.close()
     size = file_object.getbuffer().nbytes
     prefect.context.get('logger').info(
         f"SFTP: Put file {file_path} ({_sizeof_fmt(size)}) onto "
@@ -264,15 +273,10 @@ def sftp_remove(file_path: str, connection_info: dict) -> None:
     """Removes the identified file."""
 
     _make_ssh_key(connection_info)
-    try:
-        ssh = SSHClient()
-        _load_known_hosts(ssh, connection_info)
-        ssh.connect(**connection_info)
-        sftp = ssh.open_sftp()
+    ssh = SSHClient()
+    _load_known_hosts(ssh, connection_info)
+    with _sftp_connection(ssh, connection_info) as sftp:
         sftp.remove(file_path)
-    finally:
-        if ssh:
-            ssh.close()
     prefect.context.get('logger').info(
         f"SFTP: Removed file {file_path} from {connection_info['hostname']}")
 
@@ -282,16 +286,11 @@ def sftp_list(connection_info: dict, file_prefix: str=".") -> list[str]:
     directory = os.path.dirname(file_prefix)
     prefix = os.path.basename(file_prefix)
     _make_ssh_key(connection_info)
-    try:
-        ssh = SSHClient()
-        _load_known_hosts(ssh, connection_info)
-        ssh.connect(**connection_info)
-        sftp = ssh.open_sftp()
+    ssh = SSHClient()
+    _load_known_hosts(ssh, connection_info)
+    with _sftp_connection(ssh, connection_info) as sftp:
         out = [i.filename for i in sftp.listdir_attr(directory)
                if stat.S_ISREG(i.st_mode) and i.filename.startswith(prefix)]
-    finally:
-        if ssh:
-            ssh.close()
     prefect.context.get('logger').info(
         f"SFTP: Found {len(out)} files at '{directory}' with prefix '{prefix}' "
         f"on {connection_info['hostname']}")
