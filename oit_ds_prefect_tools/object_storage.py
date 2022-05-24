@@ -355,7 +355,7 @@ def minio_put(binary_object: BinaryIO,
     prefect.context.get('logger').info(
         f'Minio: Put object {object_name} ({_sizeof_fmt(size)}) into '
         f'bucket {bucket} on {connection_info["endpoint"]}')
-    util.record_push(f'minio: {connection_info["endpoint"]}', bucket, length)
+    util.record_push(f'minio: {connection_info["endpoint"]}', bucket, size)
 
 def minio_remove(object_name: str, connection_info: dict) -> None:
     """Removes the identified object from a Minio bucket."""
