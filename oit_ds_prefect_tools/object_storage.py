@@ -133,7 +133,8 @@ def store_dataframe(dataframe: pd.DataFrame, object_name: str, connection_info: 
     data = io.BytesIO(dataframe.to_parquet())
     function = _switch(info,
                        sftp=sftp_put,
-                       minio=minio_put)
+                       minio=minio_put,
+                       s3=s3_put)
     prefect.context.get('logger').info(
         f'Storing dataframe {object_name} with {len(dataframe.index)} rows in Parquet format')
     function(data, f'{object_name}.parquet', info)
@@ -147,7 +148,8 @@ def retrieve_dataframe(object_name: str, connection_info: dict) -> pd.DataFrame:
     info = connection_info.copy()
     function = _switch(info,
                        sftp=sftp_get,
-                       minio=minio_get)
+                       minio=minio_get,
+                       s3=s3_get)
     contents = function(f'{object_name}.parquet', info)
     data = io.BytesIO(contents)
     out = pd.read_parquet(data)
@@ -262,7 +264,7 @@ def sftp_put(file_object: BinaryIO, file_path: str, connection_info: dict, **kwa
     with _sftp_connection(ssh, connection_info) as sftp:
         _sftp_chdir(sftp, os.path.dirname(file_path))
         sftp.putfo(file_object, os.path.basename(file_path))
-    size = file_object.getbuffer().nbytes
+    size = file_object.seek(0, 2)
     prefect.context.get('logger').info(
         f"SFTP: Put file {file_path} ({_sizeof_fmt(size)}) onto "
         f"{connection_info['hostname']}")
@@ -343,14 +345,15 @@ def minio_put(binary_object: BinaryIO,
     bucket = connection_info['bucket']
     del connection_info['bucket']
     minio = Minio(**connection_info)
-    length = binary_object.getbuffer().nbytes
+    size = binary_object.seek(0, 2)
+    binary_object.seek(0)
     minio.put_object(bucket_name=bucket,
                      object_name=object_name,
                      data=binary_object,
-                     length=length,
+                     length=size,
                      **kwargs)
     prefect.context.get('logger').info(
-        f'Minio: Put object {object_name} ({_sizeof_fmt(length)}) into '
+        f'Minio: Put object {object_name} ({_sizeof_fmt(size)}) into '
         f'bucket {bucket} on {connection_info["endpoint"]}')
     util.record_push(f'minio: {connection_info["endpoint"]}', bucket, length)
 
@@ -431,7 +434,8 @@ def s3_put(binary_object: BinaryIO,
         else:
             raise
     bucket_res.upload_fileobj(binary_object, key=object_key, ExtraArgs=ExtraArgs)
-    size = binary_object.getbuffer().nbytes
+    size = binary_object.seek(0, 2)
+    binary_object.seek(0)
     prefect.context.get('logger').info(
         f'Amazon S3: Put object {object_key} ({_sizeof_fmt(size)})'
         f' into bucket {bucket}')

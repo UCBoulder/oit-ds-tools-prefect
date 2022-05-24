@@ -94,7 +94,7 @@ def oracle_sql_extract(sql_query: str,
     LOB-type columns which should have their `read` methods called to extract literal data."""
 
     if query_params is None:
-        query_params = {}
+        query_params = []
     if lob_columns is None:
         lob_columns = []
     _make_oracle_dsn(connection_info)
