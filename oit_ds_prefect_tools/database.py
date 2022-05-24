@@ -93,8 +93,6 @@ def oracle_sql_extract(sql_query: str,
     argument specifies values for bind variables in the query. The lob_columns argument specifies
     LOB-type columns which should have their `read` methods called to extract literal data."""
 
-    if query_params is None:
-        query_params = []
     if lob_columns is None:
         lob_columns = []
     _make_oracle_dsn(connection_info)
@@ -114,7 +112,10 @@ def oracle_sql_extract(sql_query: str,
             try_again = True
         if try_again:
             try:
-                conn.cursor().execute(sql_query, parameters=query_params)
+                if query_params:
+                    conn.cursor().execute(sql_query, parameters=query_params)
+                else:
+                    conn.cursor().execute(sql_query)
             except cx_Oracle.DatabaseError as exc:
                 try:
                     offset = exc.args[0].offset
