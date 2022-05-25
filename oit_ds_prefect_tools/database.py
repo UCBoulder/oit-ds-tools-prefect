@@ -140,7 +140,8 @@ def oracle_sql_extract(sql_query: str,
                     data = pd.DataFrame(rows, columns=columns)
                     count += len(data.index)
                     for column in lob_columns:
-                        data[column] = data[column].apply(lambda x: x.read() if x else None)
+                        data[column] = data[column].map(
+                            lambda x: b64encode(x.read()).decode('ascii') if x else None)
                     store.append('df', data)
                 store.close()
                 util.record_pull('oracle', host, os.path.getsize(hdf_filename))
@@ -152,8 +153,7 @@ def oracle_sql_extract(sql_query: str,
                 for column in lob_columns:
                     prefect.context.get('logger').info(
                         f'Reading data from LOB column {column}')
-                    data[column] = data[column].map(
-                        lambda x: b64encode(x.read()).decode('ascii') if x else None)
+                    data[column] = data[column].apply(lambda x: x.read() if x else None)
                 util.record_pull('oracle', host, sum(data.memory_usage()))
             prefect.context.get('logger').info(f'Oracle: Read {count} rows')
 
