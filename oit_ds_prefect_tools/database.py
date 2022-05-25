@@ -11,9 +11,6 @@ the constructor indicated in the list above, with some exceptions:
         string as the "dsn" argument, so instead pass "host", "port", and "sid" individually.
 """
 
-import os
-from base64 import b64encode
-
 import prefect
 import cx_Oracle
 from prefect import task
@@ -30,7 +27,8 @@ def sql_extract(sql_query: str,
                 connection_info: dict,
                 query_params=None,
                 lob_columns: list =None,
-                hdf_filename: str =None) -> pd.DataFrame:
+                parquet_chunks_prefix: str =None,
+                chunksize: int =1000) -> pd.DataFrame:
     """Returns a DataFrame derived from a SQL SELECT statement executed against the given
     database. Column names are accepted and returned in all lowercase.
 
@@ -39,17 +37,19 @@ def sql_extract(sql_query: str,
     :param query_params: List or dict specifying the values of bind variables for the query
     :param lob_columns: Names of columns containing LOB-type data that must be read as an
         additional step
-    :param hdf_filename: If given, saves the query results in chunks to an HDF5 file with the given
-        name using pandas.HDFStore to reduce memory usage. Table key is "df" in the HDFStore. Note
-        that LOB columns with this option will be converted to base64 ascii strings, since bytes
-        data is not serializable by pytables. Other Oracle datatypes may need to be b64 encoded
-        as well in a future release.
+    :param parquet_chunks_prefix: If given, saves the query results in chunks as Parquet files
+        with the given prefix (including path) to local disk. Files are named "{prefix}_0.parquet",
+        etc. Intended for queries too large to load into memory.
+    :param chunksize: How many rows to load into memory at a time. If parquet_chunks_prefix is
+        given, this also determines rows per Parquet file.
+    :return: Either a DataFrame result or the number of Parquet files created
     """
 
     info = connection_info.copy()
     function = _switch(info,
                        oracle=oracle_sql_extract)
-    dataframe = function(sql_query, info, query_params, lob_columns, hdf_filename)
+    dataframe = function(sql_query, info, query_params, lob_columns, parquet_chunks_prefix,
+                         chunksize)
     return dataframe
 
 @task(name="database.insert")
@@ -99,7 +99,8 @@ def oracle_sql_extract(sql_query: str,
                        connection_info: dict,
                        query_params=None,
                        lob_columns: list =None,
-                       hdf_filename: str =None) -> pd.DataFrame:
+                       parquet_chunks_prefix: str =None,
+                       chunksize: int =1000) -> pd.DataFrame:
     """Returns a DataFrame derived from a SQL SELECT statement executed against the given
     database. Connection encoding is automatically set to utf-8 if missing."""
 
@@ -122,7 +123,7 @@ def oracle_sql_extract(sql_query: str,
         prefect.context.get('logger').info(log_str)
 
         cursor = conn.cursor()
-        cursor.arraysize = 1000
+        cursor.arraysize = chunksize
         try:
             if query_params:
                 cursor.execute(sql_query, parameters=query_params)
@@ -130,9 +131,10 @@ def oracle_sql_extract(sql_query: str,
                 cursor.execute(sql_query)
             columns = [i[0].lower() for i in cursor.description]
 
-            if hdf_filename:
-                store = pd.HDFStore(hdf_filename, mode='w')
+            if parquet_chunks_prefix:
                 count = 0
+                size = 0
+                index = 0
                 while True:
                     rows = cursor.fetchmany()
                     if not rows:
@@ -140,12 +142,10 @@ def oracle_sql_extract(sql_query: str,
                     data = pd.DataFrame(rows, columns=columns)
                     count += len(data.index)
                     for column in lob_columns:
-                        data[column] = data[column].map(
-                            lambda x: b64encode(x.read()).decode('ascii') if x else None)
-                    store.append('df', data)
-                store.close()
-                util.record_pull('oracle', host, os.path.getsize(hdf_filename))
-
+                        data[column] = data[column].map(lambda x: x.read() if x else None)
+                    size += sum(data.memory_usage())
+                    data.to_parquet(f'{parquet_chunks_prefix}_{index}.parquet')
+                    index += 1
             else:
                 rows = cursor.fetchall()
                 data = pd.DataFrame(rows, columns=columns)
@@ -153,9 +153,14 @@ def oracle_sql_extract(sql_query: str,
                 for column in lob_columns:
                     prefect.context.get('logger').info(
                         f'Reading data from LOB column {column}')
-                    data[column] = data[column].apply(lambda x: x.read() if x else None)
-                util.record_pull('oracle', host, sum(data.memory_usage()))
+                    data[column] = data[column].map(lambda x: x.read() if x else None)
+                size = sum(data.memory_usage())
+
+            util.record_pull('oracle', host, size)
             prefect.context.get('logger').info(f'Oracle: Read {count} rows')
+            if parquet_chunks_prefix:
+                return index
+            return data
 
         except cx_Oracle.DatabaseError as exc:
             try:
@@ -166,9 +171,6 @@ def oracle_sql_extract(sql_query: str,
                 prefect.context.get('logger').error(
                     f'Oracle: Database error - {exc}\n{_sql_error(sql_query, offset)}')
             raise
-    if hdf_filename:
-        return hdf_filename
-    return data
 
 def oracle_insert(
         dataframe: pd.DataFrame,
