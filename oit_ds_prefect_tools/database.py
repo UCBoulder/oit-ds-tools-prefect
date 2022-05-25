@@ -12,6 +12,7 @@ the constructor indicated in the list above, with some exceptions:
 """
 
 import os
+from base64 import b64encode
 
 import prefect
 import cx_Oracle
@@ -39,7 +40,10 @@ def sql_extract(sql_query: str,
     :param lob_columns: Names of columns containing LOB-type data that must be read as an
         additional step
     :param hdf_filename: If given, saves the query results in chunks to an HDF5 file with the given
-        name using pandas.HDFStore to reduce memory usage. Table key is "df" in the HDFStore.
+        name using pandas.HDFStore to reduce memory usage. Table key is "df" in the HDFStore. Note
+        that LOB columns with this option will be converted to base64 ascii strings, since bytes
+        data is not serializable by pytables. Other Oracle datatypes may need to be b64 encoded
+        as well in a future release.
     """
 
     info = connection_info.copy()
@@ -148,7 +152,8 @@ def oracle_sql_extract(sql_query: str,
                 for column in lob_columns:
                     prefect.context.get('logger').info(
                         f'Reading data from LOB column {column}')
-                    data[column] = data[column].apply(lambda x: x.read() if x else None)
+                    data[column] = data[column].map(
+                        lambda x: b64encode(x.read()).decode('ascii') if x else None)
                 util.record_pull('oracle', host, sum(data.memory_usage()))
             prefect.context.get('logger').info(f'Oracle: Read {count} rows')
 
