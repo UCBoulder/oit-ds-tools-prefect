@@ -163,6 +163,8 @@ def oracle_sql_extract(sql_query: str,
                 prefect.context.get('logger').error(
                     f'Oracle: Database error - {exc}\n{_sql_error(sql_query, offset)}')
             raise
+    if hdf_filename:
+        return hdf_filename
     return data
 
 def oracle_insert(
