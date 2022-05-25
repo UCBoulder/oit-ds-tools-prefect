@@ -11,6 +11,8 @@ the constructor indicated in the list above, with some exceptions:
         string as the "dsn" argument, so instead pass "host", "port", and "sid" individually.
 """
 
+import os
+
 import prefect
 import cx_Oracle
 from prefect import task
@@ -26,18 +28,27 @@ from . import util
 def sql_extract(sql_query: str,
                 connection_info: dict,
                 query_params=None,
-                lob_columns: list =None) -> pd.DataFrame:
+                lob_columns: list =None,
+                hdf_filename: str =None) -> pd.DataFrame:
     """Returns a DataFrame derived from a SQL SELECT statement executed against the given
-    database, with query_params specifying the values of bind variables, and lob_columns specifying
-    any LOB-type columns which should have their `read` methods called to extract literal data.
-    Column names are accepted and returned in lowercase."""
+    database. Column names are accepted and returned in all lowercase.
+
+    :param sql_query: The SELECT statement to get data with
+    :param connection_info: Target system info; see this module's docstring
+    :param query_params: List or dict specifying the values of bind variables for the query
+    :param lob_columns: Names of columns containing LOB-type data that must be read as an
+        additional step
+    :param hdf_filename: If given, saves the query results in chunks to an HDF5 file with the given
+        name using pandas.HDFStore to reduce memory usage. Table key is "df". All columns are cast
+        to "string".
+    """
 
     info = connection_info.copy()
     function = _switch(info,
                        oracle=oracle_sql_extract)
     if lob_columns:
         lob_columns = [i.upper() for i in lob_columns]
-    dataframe = function(sql_query, info, query_params, lob_columns)
+    dataframe = function(sql_query, info, query_params, lob_columns, hdf_filename)
     dataframe.columns = [i.lower() for i in dataframe.columns]
     return dataframe
 
@@ -87,11 +98,10 @@ def _make_oracle_dsn(connection_info):
 def oracle_sql_extract(sql_query: str,
                        connection_info: dict,
                        query_params=None,
-                       lob_columns: list =None) -> pd.DataFrame:
+                       lob_columns: list =None,
+                       hdf_filename: str =None) -> pd.DataFrame:
     """Returns a DataFrame derived from a SQL SELECT statement executed against the given
-    database. Connection encoding is automatically set to utf-8 if missing. The query_params
-    argument specifies values for bind variables in the query. The lob_columns argument specifies
-    LOB-type columns which should have their `read` methods called to extract literal data."""
+    database. Connection encoding is automatically set to utf-8 if missing."""
 
     if lob_columns is None:
         lob_columns = []
@@ -103,37 +113,56 @@ def oracle_sql_extract(sql_query: str,
             host = conn.dsn.split('HOST=')[1].split(')')[0]
         except IndexError:
             host = 'UNKNOWN'
-        sql_snip = ' '.join(sql_query.split())[:100] + ' ...'
-        try_again = False
-        try:
-            data = pd.read_sql_query(sql_query, conn, params=query_params)
-        except pd.io.sql.DatabaseError:
-            # Get the line number of the error from the Oracle library
-            try_again = True
-        if try_again:
-            try:
-                if query_params:
-                    conn.cursor().execute(sql_query, parameters=query_params)
-                else:
-                    conn.cursor().execute(sql_query)
-            except cx_Oracle.DatabaseError as exc:
-                try:
-                    offset = exc.args[0].offset
-                except (IndexError, AttributeError):
-                    pass
-                else:
-                    prefect.context.get('logger').error(
-                        f'Oracle: Database error - {exc}\n{_sql_error(sql_query, offset)}')
-                raise
-        log_str = f"Oracle: Read {len(data.index)} rows from {host}: {sql_snip}"
+        sql_snip = ' '.join(sql_query.split())[:200] + ' ...'
+        log_str = f"Oracle: Reading from {host}: {sql_snip}"
         if query_params:
             log_str += f'\nwith injected params: {query_params}'
         prefect.context.get('logger').info(log_str)
-        for column in lob_columns:
-            prefect.context.get('logger').info(
-                f'Reading data from LOB column {column}')
-            data[column] = data[column].apply(lambda x: x.read() if x else None)
-    util.record_pull('oracle', host, sum(data.memory_usage()))
+
+        cursor = conn.cursor()
+        cursor.arraysize = 1000
+        try:
+            if query_params:
+                cursor.execute(sql_query, parameters=query_params)
+            else:
+                cursor.execute(sql_query)
+            columns = [i[0].lower() for i in cursor.description]
+
+            if hdf_filename:
+                store = pd.HDFStore(hdf_filename, mode='w')
+                count = 0
+                while True:
+                    rows = cursor.fetchmany()
+                    if not rows:
+                        break
+                    data = pd.DataFrame(rows, columns=columns, dtype='string')
+                    count += len(data.index)
+                    for column in lob_columns:
+                        data[column] = data[column].apply(lambda x: x.read() if x else None)
+                    store.append('df', data)
+                store.close()
+                util.record_pull('oracle', host, os.path.getsize(hdf_filename))
+
+            else:
+                rows = cursor.fetchall()
+                data = pd.DataFrame(rows, columns=[i[0].lower() for i in columns])
+                count = len(data.index)
+                for column in lob_columns:
+                    prefect.context.get('logger').info(
+                        f'Reading data from LOB column {column}')
+                    data[column] = data[column].apply(lambda x: x.read() if x else None)
+                util.record_pull('oracle', host, sum(data.memory_usage()))
+            prefect.context.get('logger').info(f'Oracle: Read {count} rows')
+
+        except cx_Oracle.DatabaseError as exc:
+            try:
+                offset = exc.args[0].offset
+            except (IndexError, AttributeError):
+                pass
+            else:
+                prefect.context.get('logger').error(
+                    f'Oracle: Database error - {exc}\n{_sql_error(sql_query, offset)}')
+            raise
     return data
 
 def oracle_insert(
@@ -162,6 +191,8 @@ def oracle_insert(
             host = conn.dsn.split('HOST=')[1].split(')')[0]
         except IndexError:
             host = 'UNKNOWN'
+        prefect.context.get('logger').info(
+            f"Oracle: Inserting into {table_identifier} on {host}")
         with conn.cursor() as cursor:
             if kill_and_fill:
                 cursor.execute(f'TRUNCATE TABLE {table_identifier}')
@@ -183,7 +214,7 @@ def oracle_insert(
         prefect.context.get('logger').error(
             f'Oracle: {errors - 10} more database errors while inserting not shown')
     prefect.context.get('logger').info(
-        f"Oracle: Inserted {len(records) - errors} rows into {table_identifier} on {host}")
+        f"Oracle: Inserted {len(records) - errors} rows")
     util.record_push('oracle', host, sum(dataframe.memory_usage()))
     if errors:
         raise signals.FAIL(f'Failed to insert {errors} records')
