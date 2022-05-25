@@ -39,8 +39,7 @@ def sql_extract(sql_query: str,
     :param lob_columns: Names of columns containing LOB-type data that must be read as an
         additional step
     :param hdf_filename: If given, saves the query results in chunks to an HDF5 file with the given
-        name using pandas.HDFStore to reduce memory usage. Table key is "df". All columns are cast
-        to "string".
+        name using pandas.HDFStore to reduce memory usage. Table key is "df" in the HDFStore.
     """
 
     info = connection_info.copy()
@@ -135,7 +134,7 @@ def oracle_sql_extract(sql_query: str,
                     rows = cursor.fetchmany()
                     if not rows:
                         break
-                    data = pd.DataFrame(rows, columns=columns, dtype='string')
+                    data = pd.DataFrame(rows, columns=columns)
                     count += len(data.index)
                     for column in lob_columns:
                         data[column] = data[column].apply(lambda x: x.read() if x else None)
