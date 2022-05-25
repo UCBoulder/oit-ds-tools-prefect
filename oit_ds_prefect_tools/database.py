@@ -27,7 +27,7 @@ def sql_extract(sql_query: str,
                 connection_info: dict,
                 query_params=None,
                 lob_columns: list =None,
-                parquet_chunks_prefix: str =None,
+                chunks_prefix: str =None,
                 chunksize: int =1000) -> pd.DataFrame:
     """Returns a DataFrame derived from a SQL SELECT statement executed against the given
     database. Column names are accepted and returned in all lowercase.
@@ -37,18 +37,19 @@ def sql_extract(sql_query: str,
     :param query_params: List or dict specifying the values of bind variables for the query
     :param lob_columns: Names of columns containing LOB-type data that must be read as an
         additional step
-    :param parquet_chunks_prefix: If given, saves the query results in chunks as Parquet files
-        with the given prefix (including path) to local disk. Files are named "{prefix}_0.parquet",
-        etc. Intended for queries too large to load into memory.
-    :param chunksize: How many rows to load into memory at a time. If parquet_chunks_prefix is
+    :param chunks_prefix: If given, saves the query results in chunks as pickled files
+        with the given prefix (including path) to local disk. Files are named "{prefix}_0",
+        etc. and can be read with pandas.read_pickle. Intended for queries too large to load into
+        memory.
+    :param chunksize: How many rows to load into memory at a time. If chunks_prefix is
         given, this also determines rows per Parquet file.
-    :return: Either a DataFrame result or a list of Parquet filenames
+    :return: Either a DataFrame result or a list of pickle filenames
     """
 
     info = connection_info.copy()
     function = _switch(info,
                        oracle=oracle_sql_extract)
-    dataframe = function(sql_query, info, query_params, lob_columns, parquet_chunks_prefix,
+    dataframe = function(sql_query, info, query_params, lob_columns, chunks_prefix,
                          chunksize)
     return dataframe
 
@@ -99,7 +100,7 @@ def oracle_sql_extract(sql_query: str,
                        connection_info: dict,
                        query_params=None,
                        lob_columns: list =None,
-                       parquet_chunks_prefix: str =None,
+                       chunks_prefix: str =None,
                        chunksize: int =1000) -> pd.DataFrame:
     """Returns a DataFrame derived from a SQL SELECT statement executed against the given
     database. Connection encoding is automatically set to utf-8 if missing."""
@@ -131,7 +132,7 @@ def oracle_sql_extract(sql_query: str,
                 cursor.execute(sql_query)
             columns = [i[0].lower() for i in cursor.description]
 
-            if parquet_chunks_prefix:
+            if chunks_prefix:
                 count = 0
                 size = 0
                 filenames = []
@@ -144,9 +145,9 @@ def oracle_sql_extract(sql_query: str,
                     for column in lob_columns:
                         data[column] = data[column].map(lambda x: x.read() if x else None)
                     size += sum(data.memory_usage())
-                    filename = f'{parquet_chunks_prefix}_{len(filenames)}.parquet'
+                    filename = f'{chunks_prefix}_{len(filenames)}'
                     filenames.append(filename)
-                    data.to_parquet(filename)
+                    data.to_pickle(filename)
             else:
                 rows = cursor.fetchall()
                 data = pd.DataFrame(rows, columns=columns)
@@ -159,7 +160,7 @@ def oracle_sql_extract(sql_query: str,
 
             util.record_pull('oracle', host, size)
             prefect.context.get('logger').info(f'Oracle: Read {count} rows')
-            if parquet_chunks_prefix:
+            if chunks_prefix:
                 return filenames
             return data
 

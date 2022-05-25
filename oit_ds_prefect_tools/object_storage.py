@@ -130,14 +130,14 @@ def store_dataframe(dataframe: pd.DataFrame, object_name: str, connection_info: 
     """
 
     info = connection_info.copy()
-    data = io.BytesIO(dataframe.to_parquet())
+    data = io.BytesIO(dataframe.to_pickle())
     function = _switch(info,
                        sftp=sftp_put,
                        minio=minio_put,
                        s3=s3_put)
     prefect.context.get('logger').info(
-        f'Storing dataframe {object_name} with {len(dataframe.index)} rows in Parquet format')
-    function(data, f'{object_name}.parquet', info)
+        f'Storing dataframe {object_name} with {len(dataframe.index)} rows in pickle format')
+    function(data, object_name, info)
 
 @task(name="object_storage.retrieve_dataframe")
 def retrieve_dataframe(object_name: str, connection_info: dict) -> pd.DataFrame:
@@ -150,9 +150,9 @@ def retrieve_dataframe(object_name: str, connection_info: dict) -> pd.DataFrame:
                        sftp=sftp_get,
                        minio=minio_get,
                        s3=s3_get)
-    contents = function(f'{object_name}.parquet', info)
+    contents = function(object_name, info)
     data = io.BytesIO(contents)
-    out = pd.read_parquet(data)
+    out = pd.read_pickle(data)
     prefect.context.get('logger').info(
         f'Retrieved dataframe {object_name} with {len(out.index)} rows')
     return out
