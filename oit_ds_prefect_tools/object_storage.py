@@ -236,6 +236,8 @@ def _sftp_connection(ssh_client, connection_info):
 def sftp_get(file_path: str, connection_info: dict, skip_if_missing: bool =False) -> bytes:
     """Returns the bytes content for the file at the given path from an SFTP server."""
 
+    prefect.context.get('logger').info(
+        f"SFTP: Getting file {file_path} from {connection_info['hostname']}")
     _make_ssh_key(connection_info)
     ssh = SSHClient()
     _load_known_hosts(ssh, connection_info)
@@ -252,8 +254,7 @@ def sftp_get(file_path: str, connection_info: dict, skip_if_missing: bool =False
                 raise signals.SKIP()
             raise
         out = out.getvalue()
-    prefect.context.get('logger').info(
-        f"SFTP: Got file {file_path} ({_sizeof_fmt(len(out))}) from {connection_info['hostname']}")
+    prefect.context.get('logger').info(f"SFTP: Got {_sizeof_fmt(len(out))} file")
     util.record_pull('sftp', connection_info['hostname'], len(out))
     return out
 
@@ -263,34 +264,37 @@ def sftp_put(file_object: BinaryIO, file_path: str, connection_info: dict, **kwa
     if kwargs:
         prefect.context.get('logger').warning(
             f'Additional kwargs not supported by SFTP: {kwargs.keys()}')
+    size = file_object.seek(0, 2)
+    file_object.seek(0)
+    prefect.context.get('logger').info(
+        f"SFTP: Puting file {file_path} ({_sizeof_fmt(size)}) onto {connection_info['hostname']}")
     _make_ssh_key(connection_info)
     ssh = SSHClient()
     _load_known_hosts(ssh, connection_info)
     with _sftp_connection(ssh, connection_info) as sftp:
         _sftp_chdir(sftp, os.path.dirname(file_path))
         sftp.putfo(file_object, os.path.basename(file_path))
-    size = file_object.seek(0, 2)
-    prefect.context.get('logger').info(
-        f"SFTP: Put file {file_path} ({_sizeof_fmt(size)}) onto "
-        f"{connection_info['hostname']}")
     util.record_push('sftp', connection_info['hostname'], size)
 
 def sftp_remove(file_path: str, connection_info: dict) -> None:
     """Removes the identified file."""
 
+    prefect.context.get('logger').info(
+        f"SFTP: Removing file {file_path} from {connection_info['hostname']}")
     _make_ssh_key(connection_info)
     ssh = SSHClient()
     _load_known_hosts(ssh, connection_info)
     with _sftp_connection(ssh, connection_info) as sftp:
         sftp.remove(file_path)
-    prefect.context.get('logger').info(
-        f"SFTP: Removed file {file_path} from {connection_info['hostname']}")
 
 def sftp_list(connection_info: dict, file_prefix: str=".") -> list[str]:
     """Returns a list of filenames for files in the given folder. Folders are not included."""
 
     directory = os.path.dirname(file_prefix)
     prefix = os.path.basename(file_prefix)
+    prefect.context.get('logger').info(
+        f"SFTP: Finding files at '{directory}' with prefix '{prefix}' "
+        f"on {connection_info['hostname']}")
     _make_ssh_key(connection_info)
     ssh = SSHClient()
     _load_known_hosts(ssh, connection_info)
@@ -298,8 +302,7 @@ def sftp_list(connection_info: dict, file_prefix: str=".") -> list[str]:
         out = [i.filename for i in sftp.listdir_attr(directory)
                if stat.S_ISREG(i.st_mode) and i.filename.startswith(prefix)]
     prefect.context.get('logger').info(
-        f"SFTP: Found {len(out)} files at '{directory}' with prefix '{prefix}' "
-        f"on {connection_info['hostname']}")
+        f"SFTP: Found {len(out)} files")
     return out
 
 
@@ -312,6 +315,9 @@ def minio_get(object_name: str, connection_info: dict, skip_if_missing: bool =Fa
         connection_info['secure'] = True
     bucket = connection_info['bucket']
     del connection_info['bucket']
+    prefect.context.get('logger').info(
+        f'Minio: Getting object {object_name} from '
+        f'bucket {bucket} on {connection_info["endpoint"]}')
     minio = Minio(**connection_info)
     try:
         response = minio.get_object(bucket, object_name)
@@ -332,9 +338,7 @@ def minio_get(object_name: str, connection_info: dict, skip_if_missing: bool =Fa
         except NameError:
             # response never got defined
             pass
-    prefect.context.get('logger').info(
-        f'Minio: Got object {object_name} ({_sizeof_fmt(len(out))}) from '
-        f'bucket {bucket} on {connection_info["endpoint"]}')
+    prefect.context.get('logger').info(f'Minio: Got {_sizeof_fmt(len(out))} object')
     util.record_pull(f'minio: {connection_info["endpoint"]}', bucket, len(out))
     return out
 
@@ -349,17 +353,17 @@ def minio_put(binary_object: BinaryIO,
         connection_info['secure'] = True
     bucket = connection_info['bucket']
     del connection_info['bucket']
-    minio = Minio(**connection_info)
     size = binary_object.seek(0, 2)
     binary_object.seek(0)
+    prefect.context.get('logger').info(
+        f'Minio: Putting object {object_name} ({_sizeof_fmt(size)}) into '
+        f'bucket {bucket} on {connection_info["endpoint"]}')
+    minio = Minio(**connection_info)
     minio.put_object(bucket_name=bucket,
                      object_name=object_name,
                      data=binary_object,
                      length=size,
                      **kwargs)
-    prefect.context.get('logger').info(
-        f'Minio: Put object {object_name} ({_sizeof_fmt(size)}) into '
-        f'bucket {bucket} on {connection_info["endpoint"]}')
     util.record_push(f'minio: {connection_info["endpoint"]}', bucket, size)
 
 def minio_remove(object_name: str, connection_info: dict) -> None:
@@ -369,11 +373,11 @@ def minio_remove(object_name: str, connection_info: dict) -> None:
         connection_info['secure'] = True
     bucket = connection_info['bucket']
     del connection_info['bucket']
+    prefect.context.get('logger').info(
+        f'Minio: Removing object {object_name} from '
+        f'bucket {bucket} on {connection_info["endpoint"]}')
     minio = Minio(**connection_info)
     minio.remove_object(bucket, object_name)
-    prefect.context.get('logger').info(
-        f'Minio: Removed object {object_name} from '
-        f'bucket {bucket} on {connection_info["endpoint"]}')
 
 def minio_list(connection_info: dict, prefix: str ="") -> list[str]:
     """Returns a list of object names with the given prefix in a Minio bucket; non-recursive."""
@@ -382,11 +386,12 @@ def minio_list(connection_info: dict, prefix: str ="") -> list[str]:
         connection_info['secure'] = True
     bucket = connection_info['bucket']
     del connection_info['bucket']
+    prefect.context.get('logger').info(
+        f'Minio: Finding files with prefix "{prefix}" in '
+        f'bucket {bucket} on {connection_info["endpoint"]}')
     minio = Minio(**connection_info)
     out = [i.object_name for i in minio.list_objects(bucket, prefix=prefix)]
-    prefect.context.get('logger').info(
-        f'Minio: Found {len(out)} files with prefix "{prefix}" in '
-        f'bucket {bucket} on {connection_info["endpoint"]}')
+    prefect.context.get('logger').info(f'Minio: Found {len(out)} files')
     return out
 
 
@@ -397,6 +402,8 @@ def s3_get(object_key: str, connection_info: dict, skip_if_missing: bool =False)
 
     bucket = connection_info['bucket']
     del connection_info['bucket']
+    prefect.context.get('logger').info(
+        f'Amazon S3: Getting object {object_key} from bucket {bucket}')
     session = boto3.session.Session(**connection_info)
     s3res = session.resource('s3')
     obj = s3res.Object(bucket, object_key)
@@ -412,9 +419,7 @@ def s3_get(object_key: str, connection_info: dict, skip_if_missing: bool =False)
             raise signals.SKIP()
         raise
     out = data.getvalue()
-    prefect.context.get('logger').info(
-        f'Amazon S3: Got object {object_key} ({_sizeof_fmt(len(out))}) from '
-        f'bucket {bucket}')
+    prefect.context.get('logger').info(f'Amazon S3: Got {_sizeof_fmt(len(out))} object')
     util.record_pull('s3', bucket, len(out))
     return out
 
@@ -428,6 +433,10 @@ def s3_put(binary_object: BinaryIO,
     # pylint:disable=invalid-name
     bucket = connection_info['bucket']
     del connection_info['bucket']
+    size = binary_object.seek(0, 2)
+    binary_object.seek(0)
+    prefect.context.get('logger').info(
+        f'Amazon S3: Putting object {object_key} ({_sizeof_fmt(size)}) into bucket {bucket}')
     session = boto3.session.Session(**connection_info)
     s3res = session.resource('s3')
     bucket_res = s3res.Bucket(bucket)
@@ -439,11 +448,6 @@ def s3_put(binary_object: BinaryIO,
         else:
             raise
     bucket_res.upload_fileobj(binary_object, key=object_key, ExtraArgs=ExtraArgs)
-    size = binary_object.seek(0, 2)
-    binary_object.seek(0)
-    prefect.context.get('logger').info(
-        f'Amazon S3: Put object {object_key} ({_sizeof_fmt(size)})'
-        f' into bucket {bucket}')
     util.record_push('s3', bucket, size)
 
 def s3_remove(object_key: str, connection_info: dict, VersionId: str =None) -> None:
@@ -453,12 +457,12 @@ def s3_remove(object_key: str, connection_info: dict, VersionId: str =None) -> N
     # pylint:disable=invalid-name
     bucket = connection_info['bucket']
     del connection_info['bucket']
+    prefect.context.get('logger').info(
+        f'Amazon S3: Removing object {object_key} from bucket {bucket}')
     session = boto3.session.Session(**connection_info)
     s3res = session.resource('s3')
     obj = s3res.Object(bucket, object_key)
     obj.delete(VersionId=VersionId)
-    prefect.context.get('logger').info(
-        f'Amazon S3: Removed object {object_key} from bucket {bucket}')
 
 def s3_list(connection_info: dict, Prefix: str ="") -> list[str]:
     """Returns a list of object names with the given prefix in an Amazon S3 bucket; non-recursive.
@@ -467,11 +471,11 @@ def s3_list(connection_info: dict, Prefix: str ="") -> list[str]:
     # pylint:disable=invalid-name
     bucket = connection_info['bucket']
     del connection_info['bucket']
+    prefect.context.get('logger').info(
+        f'Amazon S3: Finding files with prefix "{Prefix}" in bucket {bucket}')
     session = boto3.session.Session(**connection_info)
     s3res = session.resource('s3')
     bucket = s3res.Bucket(bucket)
     out = [i.key for i in bucket.objects.filter(Prefix=Prefix)]
-    prefect.context.get('logger').info(
-        f'Amazon S3: Found {len(out)} files with prefix "{Prefix}" in '
-        f'bucket {bucket}')
+    prefect.context.get('logger').info(f'Amazon S3: Found {len(out)} files')
     return out
