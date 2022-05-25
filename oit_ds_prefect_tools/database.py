@@ -45,10 +45,7 @@ def sql_extract(sql_query: str,
     info = connection_info.copy()
     function = _switch(info,
                        oracle=oracle_sql_extract)
-    if lob_columns:
-        lob_columns = [i.upper() for i in lob_columns]
     dataframe = function(sql_query, info, query_params, lob_columns, hdf_filename)
-    dataframe.columns = [i.lower() for i in dataframe.columns]
     return dataframe
 
 @task(name="database.insert")
@@ -104,6 +101,8 @@ def oracle_sql_extract(sql_query: str,
 
     if lob_columns is None:
         lob_columns = []
+    else:
+        lob_columns = [i.lower() for i in lob_columns]
     _make_oracle_dsn(connection_info)
     if 'encoding' not in connection_info:
         connection_info['encoding'] = 'UTF-8'
