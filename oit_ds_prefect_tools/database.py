@@ -145,7 +145,7 @@ def oracle_sql_extract(sql_query: str,
 
             else:
                 rows = cursor.fetchall()
-                data = pd.DataFrame(rows, columns=[i[0].lower() for i in columns])
+                data = pd.DataFrame(rows, columns=columns)
                 count = len(data.index)
                 for column in lob_columns:
                     prefect.context.get('logger').info(

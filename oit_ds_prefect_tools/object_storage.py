@@ -267,7 +267,7 @@ def sftp_put(file_object: BinaryIO, file_path: str, connection_info: dict, **kwa
     size = file_object.seek(0, 2)
     file_object.seek(0)
     prefect.context.get('logger').info(
-        f"SFTP: Puting file {file_path} ({_sizeof_fmt(size)}) onto {connection_info['hostname']}")
+        f"SFTP: Putting file {file_path} ({_sizeof_fmt(size)}) onto {connection_info['hostname']}")
     _make_ssh_key(connection_info)
     ssh = SSHClient()
     _load_known_hosts(ssh, connection_info)
