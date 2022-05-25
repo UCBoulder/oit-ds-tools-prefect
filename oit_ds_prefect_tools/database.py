@@ -42,7 +42,7 @@ def sql_extract(sql_query: str,
         etc. Intended for queries too large to load into memory.
     :param chunksize: How many rows to load into memory at a time. If parquet_chunks_prefix is
         given, this also determines rows per Parquet file.
-    :return: Either a DataFrame result or the number of Parquet files created
+    :return: Either a DataFrame result or a list of Parquet filenames
     """
 
     info = connection_info.copy()
@@ -134,7 +134,7 @@ def oracle_sql_extract(sql_query: str,
             if parquet_chunks_prefix:
                 count = 0
                 size = 0
-                index = 0
+                filenames = []
                 while True:
                     rows = cursor.fetchmany()
                     if not rows:
@@ -144,8 +144,9 @@ def oracle_sql_extract(sql_query: str,
                     for column in lob_columns:
                         data[column] = data[column].map(lambda x: x.read() if x else None)
                     size += sum(data.memory_usage())
-                    data.to_parquet(f'{parquet_chunks_prefix}_{index}.parquet')
-                    index += 1
+                    filename = f'{parquet_chunks_prefix}_{len(filenames)}.parquet'
+                    filenames.append(filename)
+                    data.to_parquet(filename)
             else:
                 rows = cursor.fetchall()
                 data = pd.DataFrame(rows, columns=columns)
@@ -159,7 +160,7 @@ def oracle_sql_extract(sql_query: str,
             util.record_pull('oracle', host, size)
             prefect.context.get('logger').info(f'Oracle: Read {count} rows')
             if parquet_chunks_prefix:
-                return index
+                return filenames
             return data
 
         except cx_Oracle.DatabaseError as exc:
