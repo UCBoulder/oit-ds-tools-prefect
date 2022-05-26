@@ -130,7 +130,9 @@ def store_dataframe(dataframe: pd.DataFrame, object_name: str, connection_info: 
     """
 
     info = connection_info.copy()
-    data = io.BytesIO(dataframe.to_pickle())
+    data = io.BytesIO()
+    dataframe.to_pickle(data)
+    data.seek(0)
     function = _switch(info,
                        sftp=sftp_put,
                        minio=minio_put,
