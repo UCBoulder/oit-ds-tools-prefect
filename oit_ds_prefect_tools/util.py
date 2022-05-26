@@ -142,7 +142,7 @@ def record_pull(source_type, source_name, num_bytes):
 
     if prefect.context.get('parameters')['env'] == 'prod':
         try:
-            records = kv_store.get_key_value('source_sink_records')
+            records = kv_store.get_key_value('pull_push_records')
         except ValueError:
             records = []
         except ClientError:
@@ -151,9 +151,9 @@ def record_pull(source_type, source_name, num_bytes):
         records.append(
             ['pull', source_type, source_name, datetime.now().isoformat(), int(num_bytes)])
         try:
-            kv_store.set_key_value('source_sink_records', records)
+            kv_store.set_key_value('pull_push_records', records)
             return
-        except ValueError:
+        except ClientError:
             prefect.context.get('logger').warn(
                 f'Exception while recording source data pull:\n{traceback.format_exc()}')
 
@@ -164,7 +164,7 @@ def record_push(sink_type, sink_name, num_bytes):
 
     if prefect.context.get('parameters')['env'] == 'prod':
         try:
-            records = kv_store.get_key_value('source_sink_records')
+            records = kv_store.get_key_value('pull_push_records')
         except ValueError:
             records = []
         except ClientError:
@@ -172,7 +172,7 @@ def record_push(sink_type, sink_name, num_bytes):
             return
         records.append(['push', sink_type, sink_name, datetime.now().isoformat(), int(num_bytes)])
         try:
-            kv_store.set_key_value('source_sink_records', records)
-        except ValueError:
+            kv_store.set_key_value('pull_push_records', records)
+        except ClientError:
             prefect.context.get('logger').warn(
                 f'Exception while recording sink data push:\n{traceback.format_exc()}')
