@@ -149,7 +149,8 @@ def record_pull(source_type, source_name, num_bytes):
             # Not connected to Cloud: just do nothing
             return
         records.append(
-            ['pull', source_type, source_name, datetime.now().isoformat(), int(num_bytes)])
+            ['i', prefect.context.get('flow_name'), source_type, source_name,
+             datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), int(num_bytes)])
         try:
             kv_store.set_key_value('pull_push_records', records)
             return
@@ -170,7 +171,9 @@ def record_push(sink_type, sink_name, num_bytes):
         except ClientError:
             # Not connected to Cloud: just do nothing
             return
-        records.append(['push', sink_type, sink_name, datetime.now().isoformat(), int(num_bytes)])
+        records.append(['o', prefect.context.get('flow_name'), sink_type, sink_name,
+                        datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+                        int(num_bytes)])
         try:
             kv_store.set_key_value('pull_push_records', records)
         except ClientError:
