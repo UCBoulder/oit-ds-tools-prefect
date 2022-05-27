@@ -96,6 +96,14 @@ def _make_oracle_dsn(connection_info):
         del connection_info['host']
         del connection_info['sid']
 
+def _oracle_host(dsn_string):
+    try:
+        # First try it with Net Connect Descriptor String
+        return dsn_string.split('HOST')[1].split(')')[0].replace('=', '').strip()
+    except IndexError:
+        # Now try it using Easy Connect syntax
+        return dsn_string.split('/')[0].split(':')[0].strip()
+
 def oracle_sql_extract(sql_query: str,
                        connection_info: dict,
                        query_params=None,
@@ -113,10 +121,7 @@ def oracle_sql_extract(sql_query: str,
     if 'encoding' not in connection_info:
         connection_info['encoding'] = 'UTF-8'
     with cx_Oracle.connect(**connection_info) as conn:
-        try:
-            host = conn.dsn.split('HOST')[1].split(')')[0].replace('=', '').strip()
-        except IndexError:
-            host = 'UNKNOWN'
+        host = _oracle_host(conn.dsn)
         sql_snip = ' '.join(sql_query.split())[:200] + ' ...'
         log_str = f"Oracle: Reading from {host}: {sql_snip}"
         if query_params:
@@ -196,10 +201,7 @@ def oracle_insert(
     records = dataframe.fillna(np.nan).replace([np.nan], [None]).to_dict('records')
 
     with cx_Oracle.connect(**connection_info) as conn:
-        try:
-            host = conn.dsn.split('HOST')[1].split(')')[0].replace('=', '').strip()
-        except IndexError:
-            host = 'UNKNOWN'
+        host = _oracle_host(conn.dsn)
         prefect.context.get('logger').info(
             f"Oracle: Inserting into {table_identifier} on {host}")
         with conn.cursor() as cursor:
