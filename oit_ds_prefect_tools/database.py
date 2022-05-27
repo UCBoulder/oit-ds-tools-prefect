@@ -114,7 +114,7 @@ def oracle_sql_extract(sql_query: str,
         connection_info['encoding'] = 'UTF-8'
     with cx_Oracle.connect(**connection_info) as conn:
         try:
-            host = conn.dsn.split('HOST=')[1].split(')')[0]
+            host = conn.dsn.split('HOST')[1].split(')')[0].replace('=', '').strip()
         except IndexError:
             host = 'UNKNOWN'
         sql_snip = ' '.join(sql_query.split())[:200] + ' ...'
@@ -197,7 +197,7 @@ def oracle_insert(
 
     with cx_Oracle.connect(**connection_info) as conn:
         try:
-            host = conn.dsn.split('HOST=')[1].split(')')[0]
+            host = conn.dsn.split('HOST')[1].split(')')[0].replace('=', '').strip()
         except IndexError:
             host = 'UNKNOWN'
         prefect.context.get('logger').info(
