@@ -154,7 +154,7 @@ def record_pull(source_type, source_name, num_bytes):
         try:
             kv_store.set_key_value('pull_push_records', records)
             return
-        except ClientError:
+        except Exception:
             prefect.context.get('logger').warn(
                 f'Exception while recording source data pull:\n{traceback.format_exc()}')
 
@@ -176,6 +176,6 @@ def record_push(sink_type, sink_name, num_bytes):
                         int(num_bytes)])
         try:
             kv_store.set_key_value('pull_push_records', records)
-        except ClientError:
+        except Exception:
             prefect.context.get('logger').warn(
                 f'Exception while recording sink data push:\n{traceback.format_exc()}')
