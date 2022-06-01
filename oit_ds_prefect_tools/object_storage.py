@@ -449,7 +449,7 @@ def s3_put(binary_object: BinaryIO,
             bucket_res.create()
         else:
             raise
-    bucket_res.upload_fileobj(binary_object, key=object_key, ExtraArgs=ExtraArgs)
+    bucket_res.upload_fileobj(binary_object, object_key, ExtraArgs=ExtraArgs)
     util.record_push('s3', bucket, size)
 
 def s3_remove(object_key: str, connection_info: dict, VersionId: str =None) -> None:
