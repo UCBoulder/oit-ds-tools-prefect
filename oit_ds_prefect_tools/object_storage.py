@@ -275,7 +275,8 @@ def sftp_put(file_object: BinaryIO, file_path: str, connection_info: dict, **kwa
     _load_known_hosts(ssh, connection_info)
     with _sftp_connection(ssh, connection_info) as sftp:
         _sftp_chdir(sftp, os.path.dirname(file_path))
-        sftp.putfo(file_object, os.path.basename(file_path))
+        # Confirming can throw an error on CUTransfer where files are moved immediately
+        sftp.putfo(file_object, os.path.basename(file_path), confirm=False)
     util.record_push('sftp', connection_info['hostname'], size)
 
 def sftp_remove(file_path: str, connection_info: dict) -> None:
