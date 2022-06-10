@@ -24,14 +24,14 @@ To update the version of Prefect Tools used in the docker images of one or more 
 
 ### Updating packages in a single image
 
-First, remove the tag from your local machine if it exists, for example:
+First, rebuild your local image with the `--no-cache` option and re-push it to Artifactory, for example:
 
 ```
-docker images
-docker rmi oit-data-services-docker-local.artifactory.colorado.edu/oit-ds-flows-ata:v1
+cd image
+docker build -f Dockerfile -t oit-data-services-docker-local.artifactory.colorado.edu/oit-ds-flows-ata:v1 --no-cache .
+cd ..
+make docker-image VERSION=v1
 ```
-
-Then, delete this image from Artifactory through the Web UI. Just right-click on the particular image version and delete it.
 
 Then, re-build the image from the flow's repo on your local machine, for example: `make docker-image VERSION=v1`
 
@@ -42,8 +42,6 @@ Finally, run the same command from step 1 on the agent machine to remove the ima
 If you make a bugfix in Prefect Tools and want to update all flows simultaneously to use the newest version, do this. If you want a particular flow to still use an old version of any package, specify the package version in your requirements.txt file.
 
 First, remove all cached images from your local machine: `docker image prune -a`
-
-Then, delete all these images from Artifactory through the Web UI. Click into every folder in the registry and right-click+delete the images versions you want to rebuild.
 
 Ensure you have all the flow repos for these images cloned to your computer, then rebuild the image for each one. For example (this assumes every image is on v1! grep carefully!):
 
