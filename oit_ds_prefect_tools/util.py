@@ -3,18 +3,67 @@
 import os
 import smtplib
 import traceback
+import email
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
 from typing import Callable
 from datetime import datetime
 
 import prefect
+from prefect import task
 from prefect.client import Secret
 from prefect import storage
 from prefect.backend import kv_store
 from prefect.run_configs.docker import DockerRun
 from prefect.exceptions import ClientError
 import git
+
+@task
+def send_email(addressed_to: str, subject: str, body: str, attachments: list, smtp_info: dict):
+    """Sends an email.
+
+    :param addressed_to: A list of emails to send to separated by ", "
+    :param subject: Email subject
+    :param body: Plain text email body
+    :param attachments: List of (bytes, str) tuples giving the file contents and the filename of
+        objects to attach
+    :param smtp_info: Dict with keys "from" (sender email), "host", and "port"
+    """
+
+    msg = MIMEMultipart()
+    msg["From"] = smtp_info['from']
+    msg["To"] = addressed_to
+    msg["Subject"] = subject
+    msg.attach(MIMEText(body))
+
+    for contents, filename in attachments:
+        obj = MIMEBase("application", "octet-stream")
+        obj.set_payload(contents)
+        email.encoders.encode_base64(obj)
+        obj.add_header("Content-Disposition", f"attachment; filename= {filename}")
+        msg.attach(obj)
+
+    mailserver = smtplib.SMTP(smtp_info['host'], smtp_info['port'])
+
+    if addressed_to:
+        info = f'Sending "{subject}" email to {addressed_to}'
+        if attachments:
+            info += ' with attachments ' + ', '.join([i[1] for i in attachments])
+        info += f":\n{body[:500]} ..."
+        prefect.context.get('logger').info(info)
+        mailserver.sendmail(smtp_info['from'].split(", "),
+                            addressed_to.split(", "),
+                            msg.as_string())
+        mailserver.quit()
+        if attachments:
+            record_push('smtp', smtp_info['host'], sum(len(i[0]) for i in attachments))
+    else:
+        info = f'No delivery contacts set; "{subject}" email not sent'
+        if attachments:
+            info += ' with attachments ' + ', '.join([i[1] for i in attachments])
+        info += f":\n{body[:500]} ..."
+        prefect.context.get('logger').warn(info)
 
 def failure_notifier(smtp_info_keyname: str, contacts_param: str) -> Callable:
     """Returns a function which can be passed to a Flow's on_failure argument in order to send
@@ -140,6 +189,7 @@ def record_pull(source_type, source_name, num_bytes):
     context. Be sure to call this function if you ever write your own extraction task outside this
     package. Does nothing if the flow's "env" param is not "prod"."""
 
+    # pylint:disable=broad-except
     if prefect.context.get('parameters')['env'] == 'prod':
         try:
             records = kv_store.get_key_value('pull_push_records')
@@ -163,6 +213,7 @@ def record_push(sink_type, sink_name, num_bytes):
     context. Be sure to call this function if you ever write your own extraction task outside this
     package. Does nothing if the flow's "env" param is not "prod"."""
 
+    # pylint:disable=broad-except
     if prefect.context.get('parameters')['env'] == 'prod':
         try:
             records = kv_store.get_key_value('pull_push_records')
