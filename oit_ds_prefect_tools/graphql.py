@@ -43,11 +43,12 @@ def query(query_str: str,
           variables: dict =None,
           operation_name: str =None,
           chunk_variable: str =None,
+          chunksize: int =100,
           next_variables_getter: Callable =None):
     """POSTs a GraphQL query or mutation and returns the "data" entry of the response.
 
     If chunk_variable is given, this is the name of a list-like variable which will be split into
-    chunks of 100, with a separate request sent for each chunk.
+    chunks of chunksize, with a separate request sent for each chunk.
 
     If next_variables_getter is given, this is a function which will take the "data" entry of the
     response. If it returns a dict, then the query will be POSTED again using this dict as the
@@ -63,13 +64,19 @@ def query(query_str: str,
     if chunk_variable:
         to_chunk = variables[chunk_variable]
         current_vars = variables.copy()
-        current_vars[chunk_variable] = to_chunk[:100]
-        def chunker(_):
+        current_vars[chunk_variable] = to_chunk[:chunksize]
+        def chunk_iter():
             base_vars = variables.copy()
-            for i in range(100, len(to_chunk), 100):
-                base_vars[chunk_variable] = to_chunk[i:i + 100]
+            for i in range(chunksize, len(to_chunk), chunksize):
+                base_vars[chunk_variable] = to_chunk[i:i + chunksize]
                 yield base_vars
-        next_vars = chunker
+        chunks = chunk_iter()
+        def chunk_getter(_):
+            try:
+                return next(chunks)
+            except StopIteration:
+                return None
+        next_vars = chunk_getter
     elif next_variables_getter:
         current_vars = variables
         next_vars = next_variables_getter
