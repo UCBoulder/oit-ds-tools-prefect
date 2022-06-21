@@ -14,6 +14,7 @@ from prefect import task
 import requests
 
 from . import util
+from .util import sizeof_fmt
 
 class GraphQLError(Exception):
     """Exception for when GraphQL response lists errors"""
@@ -42,42 +43,18 @@ def query(query_str: str,
           connection_info: dict,
           variables: dict =None,
           operation_name: str =None,
-          chunk_variable: str =None,
-          chunksize: int =100,
           next_variables_getter: Callable =None):
     """POSTs a GraphQL query or mutation and returns the "data" entry of the response.
-
-    If chunk_variable is given, this is the name of a list-like variable which will be split into
-    chunks of chunksize, with a separate request sent for each chunk.
 
     If next_variables_getter is given, this is a function which will take the "data" entry of the
     response. If it returns a dict, then the query will be POSTED again using this dict as the
     new variables param (i.e. to get the next page of data). If it returns None or {}, the task
-    ends.
-
-    With either of these options, a list of "data" response entries is returned instead of a
-    singular. The two options are mutually exclusive.
+    ends. With this option, a list of "data" response entries is returned instead of a singular.
     """
 
     # pylint:disable=too-many-locals
     # pylint:disable=too-many-arguments
-    if chunk_variable:
-        to_chunk = variables[chunk_variable]
-        current_vars = variables.copy()
-        current_vars[chunk_variable] = to_chunk[:chunksize]
-        def chunk_iter():
-            base_vars = variables.copy()
-            for i in range(chunksize, len(to_chunk), chunksize):
-                base_vars[chunk_variable] = to_chunk[i:i + chunksize]
-                yield base_vars
-        chunks = chunk_iter()
-        def chunk_getter(_):
-            try:
-                return next(chunks)
-            except StopIteration:
-                return None
-        next_vars = chunk_getter
-    elif next_variables_getter:
+    if next_variables_getter:
         current_vars = variables
         next_vars = next_variables_getter
     else:
@@ -107,7 +84,7 @@ def query(query_str: str,
         total_size += size
         current_vars = next_vars(data)
 
-    message = f'GraphQL: Read {size} bytes'
+    message = f'GraphQL: Read {sizeof_fmt(size)} bytes'
     if len(result_data) > 1:
         message += ' from {len(result_data)} requests'
     else:

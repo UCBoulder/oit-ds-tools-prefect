@@ -189,30 +189,16 @@ def record_pull(source_type, source_name, num_bytes):
     context. Be sure to call this function if you ever write your own extraction task outside this
     package. Does nothing if the flow's "env" param is not "prod"."""
 
-    # pylint:disable=broad-except
-    if prefect.context.get('parameters')['env'] == 'prod':
-        try:
-            records = kv_store.get_key_value('pull_push_records')
-        except ValueError:
-            records = []
-        except ClientError:
-            # Not connected to Cloud: just do nothing
-            return
-        records.append(
-            ['i', prefect.context.get('flow_name'), source_type, source_name,
-             datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), int(num_bytes)])
-        try:
-            kv_store.set_key_value('pull_push_records', records)
-            return
-        except Exception:
-            prefect.context.get('logger').warn(
-                f'Exception while recording source data pull:\n{traceback.format_exc()}')
+    _make_record('pull', source_type, source_name, num_bytes)
 
 def record_push(sink_type, sink_name, num_bytes):
     """Makes a record in Prefect Cloud that data was pushed to a sink system within a Flow
     context. Be sure to call this function if you ever write your own extraction task outside this
     package. Does nothing if the flow's "env" param is not "prod"."""
 
+    _make_record('push', sink_type, sink_name, num_bytes)
+
+def _make_record(record_type, source_type, source_name, num_bytes):
     # pylint:disable=broad-except
     if prefect.context.get('parameters')['env'] == 'prod':
         try:
@@ -222,11 +208,26 @@ def record_push(sink_type, sink_name, num_bytes):
         except ClientError:
             # Not connected to Cloud: just do nothing
             return
-        records.append(['o', prefect.context.get('flow_name'), sink_type, sink_name,
-                        datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
-                        int(num_bytes)])
+        # Combine identical records within the same hour
+        time = datetime.now().strftime("%Y-%m-%dT%H:00:00")
+        base_record = [record_type, prefect.context.get('flow_name'), source_type, source_name,
+                       time]
+        try:
+            existing_record = next(i for i in records if i[:5] == base_record)
+            existing_record[5] += int(num_bytes)
+        except StopIteration:
+            existing_record = base_record + [int(num_bytes)]
         try:
             kv_store.set_key_value('pull_push_records', records)
         except Exception:
             prefect.context.get('logger').warn(
                 f'Exception while recording sink data push:\n{traceback.format_exc()}')
+
+def sizeof_fmt(num):
+    """Takes a number of bytes and returns a human-readable representation"""
+
+    for unit in ["B", "KB", "MB", "GB", "TB"]:
+        if abs(num) < 1024.0:
+            return f"{num:3.1f} {unit}"
+        num /= 1024.0
+    return f"{num:.1f} PB"
