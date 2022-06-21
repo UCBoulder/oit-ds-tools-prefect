@@ -11,11 +11,11 @@ authentication), and/or you can include an "auth" key set to a tuple or list of 
 Basic Authentication. These values are simply passed to the requests module's function as args.
 """
 
-from pprint import pformat
 from typing import Callable
 
 import prefect
 from prefect import task
+from prefect.engine import signals
 import requests
 import pandas as pd
 
@@ -28,17 +28,55 @@ def get(endpoint: str,
         params: dict =None,
         next_page_getter: Callable =None,
         to_dataframe: bool =False,
-        statuses_to_skip: list =None):
+        codes_to_skip: list =None):
     """Sends a GET request to the specified endpoint, along with any params, and returns the
     JSON results.
 
     For paginated data, supply a function to next_page_getter that takes a requests.Response object
-    and returns the endpoint of the next page of data. Paginated data is returned as a list of JSON
-    results: if each result is a list, these are concatenated together to form a single list.
+    and returns the endpoint of the next page of data (or None if no more pages). Paginated data is
+    returned as a list of JSON results: if each result is a list, these are concatenated together
+    to form a single list.
 
     If to_dataframe is true, the JSON results will be used to initialize a pandas.Dataframe to be
     returned instead.
+
+    If any of the codes (from the requests module) included in the codes_to_skip argument are
+    returned in the http response, a SKIP signal will be raised instead of an exception.
     """
+    # pylint:disable=too-many-arguments
+
+    if not next_page_getter:
+        next_page_getter = lambda _: None
+    info = connection_info.copy()
+    domain = info.pop('domain')
+    url = domain + endpoint
+    prefect.context.get('logger').info(f'REST: Sending GET to {url} ...')
+    auth = info.pop('auth', None)
+    kwargs = {'header': info}
+    if auth:
+        kwargs['auth'] = auth
+    if params:
+        kwargs['params'] = params
+    size = 0
+    data = []
+    while url:
+        response = requests.get(url, **kwargs)
+        if codes_to_skip and response.status_code in codes_to_skip:
+            raise signals.SKIP(
+                f'Received {response.status_code} response; skipping task: {response.text}')
+        response.raise_for_status()
+        size += len(response.content)
+        result = response.json()
+        if isinstance(result, list):
+            data += result
+        else:
+            data.append(result)
+        url = next_page_getter(response)
+    prefect.context.get('logger').info(f'REST: Received {len(data)} objects')
+    util.record_pull('rest', domain, size)
+    if to_dataframe:
+        return pd.DataFrame(data)
+    return data
 
 @task(name='rest.post')
 def post(endpoint: str, connection_info: dict, data=None, json=None, files=None):
@@ -105,6 +143,6 @@ def delete(endpoint: str, connection_info: dict):
     kwargs = {'header': info}
     if auth:
         kwargs['auth'] = auth
-    response = requests.put(url, **kwargs)
+    response = requests.delete(url, **kwargs)
     response.raise_for_status()
     return response.json()
