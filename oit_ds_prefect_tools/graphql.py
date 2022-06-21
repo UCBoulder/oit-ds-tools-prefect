@@ -27,7 +27,8 @@ def _graphql_query(request):
     response = requests.post(**request)
     response.raise_for_status()
     result = response.json()
-    size = len(response.content)
+    received_size = len(response.content)
+    sent_size = len(response.request.body)
     if 'errors' in result:
         errors = result['errors']
         message = f'Response listed {len(errors)} errors:\n'
@@ -36,7 +37,7 @@ def _graphql_query(request):
             message += f'\n(Plus {len(errors) - 5} more)'
         message += f'\n\nRequest JSON:\n{pformat(request["json"])}'
         raise GraphQLError(message, errors)
-    return result['data'], size
+    return result['data'], sent_size, received_size
 
 @task(name="graphql.query")
 def query(query_str: str,
@@ -61,11 +62,9 @@ def query(query_str: str,
         current_vars = variables
         next_vars = lambda _: None
 
-    message = f'GraphQL: Reading from {connection_info["endpoint"]}: {query_str[:200]} ...'
+    message = f'GraphQL: Querying {connection_info["endpoint"]}: {query_str[:200]} ...'
     if operation_name:
         message += f'\nusing operation {operation_name}'
-    if current_vars:
-        message += f'\nwith variables {current_vars}'
     prefect.context.get('logger').info(message)
 
     request = {'url': connection_info['endpoint']}
@@ -75,20 +74,24 @@ def query(query_str: str,
         request['json']['operationName'] = operation_name
 
     result_data = []
-    total_size = 0
+    total_sent = 0
+    total_received = 0
     while current_vars or not result_data:
         if current_vars:
             request['json']['variables'] = current_vars
-        data, size = _graphql_query(request)
+        data, sent_size, received_size = _graphql_query(request)
         result_data.append(data)
-        total_size += size
+        total_sent += sent_size
+        total_received += received_size
         current_vars = next_vars(data)
 
-    message = f'GraphQL: Read {sizeof_fmt(size)} bytes'
+    message = (f'GraphQL: Sent {sizeof_fmt(total_sent)} and received {sizeof_fmt(total_received)}'
+               ' of data')
     if len(result_data) > 1:
-        message += ' from {len(result_data)} requests'
+        message += ' with {len(result_data)} requests'
     else:
         result_data = result_data[0]
     prefect.context.get('logger').info(message)
-    util.record_pull('graphql', connection_info['endpoint'], size)
+    util.record_push('graphql', connection_info['endpoint'], total_sent)
+    util.record_pull('graphql', connection_info['endpoint'], total_received)
     return result_data
