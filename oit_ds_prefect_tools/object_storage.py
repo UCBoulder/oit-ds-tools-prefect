@@ -41,6 +41,7 @@ import boto3
 import botocore
 
 from . import util
+from .util import sizeof_fmt
 
 # pylint:disable=not-callable
 
@@ -51,13 +52,6 @@ def join_path(left: str, right: str) -> str:
     """Task wrapper for os.path.join, useful for getting full paths after calling list_files"""
 
     return os.path.join(left, right)
-
-def _sizeof_fmt(num):
-    for unit in ["B", "KB", "MB", "GB", "TB"]:
-        if abs(num) < 1024.0:
-            return f"{num:3.1f} {unit}"
-        num /= 1024.0
-    return f"{num:.1f} PB"
 
 def _switch(connection_info, **kwargs):
     for key, value in kwargs.items():
@@ -256,7 +250,7 @@ def sftp_get(file_path: str, connection_info: dict, skip_if_missing: bool =False
                 raise signals.SKIP()
             raise
         out = out.getvalue()
-    prefect.context.get('logger').info(f"SFTP: Got {_sizeof_fmt(len(out))} file")
+    prefect.context.get('logger').info(f"SFTP: Got {sizeof_fmt(len(out))} file")
     util.record_pull('sftp', connection_info['hostname'], len(out))
     return out
 
@@ -269,7 +263,7 @@ def sftp_put(file_object: BinaryIO, file_path: str, connection_info: dict, **kwa
     size = file_object.seek(0, 2)
     file_object.seek(0)
     prefect.context.get('logger').info(
-        f"SFTP: Putting file {file_path} ({_sizeof_fmt(size)}) onto {connection_info['hostname']}")
+        f"SFTP: Putting file {file_path} ({sizeof_fmt(size)}) onto {connection_info['hostname']}")
     _make_ssh_key(connection_info)
     ssh = SSHClient()
     _load_known_hosts(ssh, connection_info)
@@ -341,7 +335,7 @@ def minio_get(object_name: str, connection_info: dict, skip_if_missing: bool =Fa
         except NameError:
             # response never got defined
             pass
-    prefect.context.get('logger').info(f'Minio: Got {_sizeof_fmt(len(out))} object')
+    prefect.context.get('logger').info(f'Minio: Got {sizeof_fmt(len(out))} object')
     util.record_pull(f'minio: {connection_info["endpoint"]}', bucket, len(out))
     return out
 
@@ -359,7 +353,7 @@ def minio_put(binary_object: BinaryIO,
     size = binary_object.seek(0, 2)
     binary_object.seek(0)
     prefect.context.get('logger').info(
-        f'Minio: Putting object {object_name} ({_sizeof_fmt(size)}) into '
+        f'Minio: Putting object {object_name} ({sizeof_fmt(size)}) into '
         f'bucket {bucket} on {connection_info["endpoint"]}')
     minio = Minio(**connection_info)
     minio.put_object(bucket_name=bucket,
@@ -422,7 +416,7 @@ def s3_get(object_key: str, connection_info: dict, skip_if_missing: bool =False)
             raise signals.SKIP()
         raise
     out = data.getvalue()
-    prefect.context.get('logger').info(f'Amazon S3: Got {_sizeof_fmt(len(out))} object')
+    prefect.context.get('logger').info(f'Amazon S3: Got {sizeof_fmt(len(out))} object')
     util.record_pull('s3', bucket, len(out))
     return out
 
@@ -439,7 +433,7 @@ def s3_put(binary_object: BinaryIO,
     size = binary_object.seek(0, 2)
     binary_object.seek(0)
     prefect.context.get('logger').info(
-        f'Amazon S3: Putting object {object_key} ({_sizeof_fmt(size)}) into bucket {bucket}')
+        f'Amazon S3: Putting object {object_key} ({sizeof_fmt(size)}) into bucket {bucket}')
     session = boto3.session.Session(**connection_info)
     s3res = session.resource('s3')
     bucket_res = s3res.Bucket(bucket)

@@ -14,6 +14,7 @@ from prefect import task
 import requests
 
 from . import util
+from .util import sizeof_fmt
 
 class GraphQLError(Exception):
     """Exception for when GraphQL response lists errors"""
@@ -26,69 +27,44 @@ def _graphql_query(request):
     response = requests.post(**request)
     response.raise_for_status()
     result = response.json()
-    size = len(response.content)
+    received_size = len(response.content)
+    sent_size = len(response.request.body)
     if 'errors' in result:
         errors = result['errors']
         message = f'Response listed {len(errors)} errors:\n'
         message += '\n'.join(pformat(i) for i in errors[:5])
         if len(errors) > 5:
             message += f'\n(Plus {len(errors) - 5} more)'
-        message += f'\n\nRequest JSON:\n{pformat(request["json"])}'
+        message += f'\n\nRequest JSON:\n{pformat(request["json"])[:2000]}'
         raise GraphQLError(message, errors)
-    return result['data'], size
+    return result['data'], sent_size, received_size
 
 @task(name="graphql.query")
 def query(query_str: str,
           connection_info: dict,
           variables: dict =None,
           operation_name: str =None,
-          chunk_variable: str =None,
-          chunksize: int =100,
           next_variables_getter: Callable =None):
     """POSTs a GraphQL query or mutation and returns the "data" entry of the response.
-
-    If chunk_variable is given, this is the name of a list-like variable which will be split into
-    chunks of chunksize, with a separate request sent for each chunk.
 
     If next_variables_getter is given, this is a function which will take the "data" entry of the
     response. If it returns a dict, then the query will be POSTED again using this dict as the
     new variables param (i.e. to get the next page of data). If it returns None or {}, the task
-    ends.
-
-    With either of these options, a list of "data" response entries is returned instead of a
-    singular. The two options are mutually exclusive.
+    ends. With this option, a list of "data" response entries is returned instead of a singular.
     """
 
     # pylint:disable=too-many-locals
     # pylint:disable=too-many-arguments
-    if chunk_variable:
-        to_chunk = variables[chunk_variable]
-        current_vars = variables.copy()
-        current_vars[chunk_variable] = to_chunk[:chunksize]
-        def chunk_iter():
-            base_vars = variables.copy()
-            for i in range(chunksize, len(to_chunk), chunksize):
-                base_vars[chunk_variable] = to_chunk[i:i + chunksize]
-                yield base_vars
-        chunks = chunk_iter()
-        def chunk_getter(_):
-            try:
-                return next(chunks)
-            except StopIteration:
-                return None
-        next_vars = chunk_getter
-    elif next_variables_getter:
+    if next_variables_getter:
         current_vars = variables
         next_vars = next_variables_getter
     else:
         current_vars = variables
         next_vars = lambda _: None
 
-    message = f'GraphQL: Reading from {connection_info["endpoint"]}: {query_str[:200]} ...'
+    message = f'GraphQL: Querying {connection_info["endpoint"]}: {query_str[:200]} ...'
     if operation_name:
         message += f'\nusing operation {operation_name}'
-    if current_vars:
-        message += f'\nwith variables {current_vars}'
     prefect.context.get('logger').info(message)
 
     request = {'url': connection_info['endpoint']}
@@ -98,20 +74,24 @@ def query(query_str: str,
         request['json']['operationName'] = operation_name
 
     result_data = []
-    total_size = 0
+    total_sent = 0
+    total_received = 0
     while current_vars or not result_data:
         if current_vars:
             request['json']['variables'] = current_vars
-        data, size = _graphql_query(request)
+        data, sent_size, received_size = _graphql_query(request)
         result_data.append(data)
-        total_size += size
+        total_sent += sent_size
+        total_received += received_size
         current_vars = next_vars(data)
 
-    message = f'GraphQL: Read {size} bytes'
+    message = (f'GraphQL: Sent {sizeof_fmt(total_sent)} and received {sizeof_fmt(total_received)}'
+               ' of data')
     if len(result_data) > 1:
-        message += ' from {len(result_data)} requests'
+        message += ' with {len(result_data)} requests'
     else:
         result_data = result_data[0]
     prefect.context.get('logger').info(message)
-    util.record_pull('graphql', connection_info['endpoint'], size)
+    util.record_push('graphql', connection_info['endpoint'], total_sent)
+    util.record_pull('graphql', connection_info['endpoint'], total_received)
     return result_data

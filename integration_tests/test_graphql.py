@@ -2,7 +2,7 @@
 
 import unittest
 
-from prefect import Flow, task, Parameter
+from prefect import Flow, task, Parameter, unmapped
 
 from oit_ds_prefect_tools import graphql
 
@@ -31,7 +31,7 @@ class QueryTests(unittest.TestCase):
         self.assertFalse(state.is_failed())
 
     def test_chunking(self):
-        """Tests query with a chunked variable"""
+        """Tests query with chunked variables"""
 
         @task
         def validate(results):
@@ -40,12 +40,13 @@ class QueryTests(unittest.TestCase):
 
         with Flow('test') as flow:
             flow.add_task(Parameter('env', default='dev'))
-            results = graphql.query(
-                query_str='query ChunkQuery($ids: [ID!]!) { charactersByIds(ids: $ids) { name } }',
-                variables={'ids':["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]},
-                chunk_variable="ids",
-                chunksize=3,
-                connection_info=self.connection_info)
+            chunks = [["1", "2", "3"], ["4", "5", "6"], ["7", "8", "9"], ["10"]]
+            variables = [{'ids':i} for i in chunks]
+            results = graphql.query.map(
+                query_str=unmapped(
+                    'query ChunkQuery($ids: [ID!]!) { charactersByIds(ids: $ids) { name } }'),
+                variables=variables,
+                connection_info=unmapped(self.connection_info))
             validate(results)
         state = flow.run()
         self.assertFalse(state.is_failed())
