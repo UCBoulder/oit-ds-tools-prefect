@@ -45,6 +45,6 @@ First, remove all cached images from your local machine: `docker image prune -a`
 
 Ensure you have all the flow repos for these images cloned to your computer, then rebuild the image for each one. For example (this assumes every image is on v1! grep carefully!):
 
-`ls | grep oit-ds-flows | xargs -n 1 -I % sh 'cd % && make docker-image VERSION=v1'`
+`ls | grep oit-ds-flows | xargs -n 1 -I % sh -c 'cd % && make docker-image VERSION=v1'`
 
 Finally, wait for a time when none of these docker images/flows are running on the agent machine, and then remove all cached images from it: `docker image prune -a`
