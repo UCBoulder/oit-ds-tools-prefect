@@ -52,7 +52,7 @@ def get(endpoint: str,
     url = domain + endpoint
     prefect.context.get('logger').info(f'REST: Sending GET to {url} ...')
     auth = info.pop('auth', None)
-    kwargs = {'header': info}
+    kwargs = {'headers': info}
     if auth:
         kwargs['auth'] = auth
     if params:
@@ -88,7 +88,7 @@ def post(endpoint: str, connection_info: dict, data=None, json=None, files=None)
     url = domain + endpoint
     prefect.context.get('logger').info(f'REST: Sending POST to {url} ...')
     auth = info.pop('auth', None)
-    kwargs = {'header': info}
+    kwargs = {'headers': info}
     if auth:
         kwargs['auth'] = auth
     if data:
@@ -114,7 +114,7 @@ def put(endpoint: str, connection_info: dict, data=None, json=None, files=None):
     url = domain + endpoint
     prefect.context.get('logger').info(f'REST: Sending PUT to {url} ...')
     auth = info.pop('auth', None)
-    kwargs = {'header': info}
+    kwargs = {'headers': info}
     if auth:
         kwargs['auth'] = auth
     if data:
@@ -140,7 +140,7 @@ def delete(endpoint: str, connection_info: dict):
     url = domain + endpoint
     prefect.context.get('logger').info(f'REST: Sending DELETE to {url} ...')
     auth = info.pop('auth', None)
-    kwargs = {'header': info}
+    kwargs = {'headers': info}
     if auth:
         kwargs['auth'] = auth
     response = requests.delete(url, **kwargs)
