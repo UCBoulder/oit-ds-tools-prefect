@@ -41,10 +41,10 @@ Finally, run the same command from step 1 on the agent machine to remove the ima
 
 If you make a bugfix in Prefect Tools and want to update all flows simultaneously to use the newest version, do this. If you want a particular flow to still use an old version of any package, specify the package version in your requirements.txt file.
 
-First, remove all cached images from your local machine: `docker image prune -a`
+First, remove all cached images from your local machine: `docker system prune -a`
 
 Ensure you have all the flow repos for these images cloned to your computer, then rebuild the image for each one. For example (this assumes every image is on v1! grep carefully!):
 
 `ls | grep oit-ds-flows | xargs -n 1 -I % sh -c 'cd % && make docker-image VERSION=v1'`
 
-Finally, wait for a time when none of these docker images/flows are running on the agent machine, and then remove all cached images from it: `docker image prune -a`
+Finally, wait for a time when none of these docker images/flows are running on the agent machine, and then remove all cached images from it: `docker system prune -a`
