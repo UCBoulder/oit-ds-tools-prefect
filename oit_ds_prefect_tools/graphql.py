@@ -35,7 +35,7 @@ def _graphql_query(request):
         message += '\n'.join(pformat(i) for i in errors[:5])
         if len(errors) > 5:
             message += f'\n(Plus {len(errors) - 5} more)'
-        message += f'\n\nRequest JSON:\n{pformat(request["json"])[:1000]}'
+        message += f'\n\nRequest JSON:\n{pformat(request["json"])[:2000]}'
         raise GraphQLError(message, errors)
     return result['data'], sent_size, received_size
 
