@@ -32,10 +32,11 @@ def get(endpoint: str,
     """Sends a GET request to the specified endpoint, along with any params, and returns the
     JSON results.
 
-    For paginated data, supply a function to next_page_getter that takes a requests.Response object
-    and returns the endpoint of the next page of data (or None if no more pages). Paginated data is
-    returned as a list of JSON results: if each result is a list, these are concatenated together
-    to form a single list.
+    For paginated data, supply a function to next_page_getter that takes a requests.response object
+    and returns either the str endpoint of the next page of data or a dict of params to update the
+    initial params with. The next_page_getter should return None when where are no more pages.
+    Paginated data is returned as a list of JSON results: if each result is a list, these are
+    concatenated together to form a single list.
 
     If to_dataframe is true, the JSON results will be used to initialize a pandas.Dataframe to be
     returned instead.
@@ -44,6 +45,7 @@ def get(endpoint: str,
     returned in the http response, a SKIP signal will be raised instead of an exception.
     """
     # pylint:disable=too-many-arguments
+    # pylint:disable=too-many-locals
 
     if not next_page_getter:
         next_page_getter = lambda _: None
@@ -59,7 +61,7 @@ def get(endpoint: str,
         kwargs['params'] = params
     size = 0
     data = []
-    while url:
+    while True:
         response = requests.get(url, **kwargs)
         if codes_to_skip and response.status_code in codes_to_skip:
             raise signals.SKIP(
@@ -71,7 +73,17 @@ def get(endpoint: str,
             data += result
         else:
             data.append(result)
-        url = next_page_getter(response)
+        next_page_info = next_page_getter(response)
+        if not next_page_info:
+            break
+        if isinstance(next_page_info, str):
+            url = next_page_info
+        elif isinstance(next_page_info, dict):
+            kwargs['params'].update(next_page_info)
+        else:
+            raise TypeError(
+                f'Param next_page_getter must return a str or dict, not {type(next_page_info)}')
+
     prefect.context.get('logger').info(f'REST: Received {len(data)} objects')
     util.record_pull('rest', domain, size)
     if to_dataframe:

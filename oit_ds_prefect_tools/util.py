@@ -216,7 +216,7 @@ def _make_record(record_type, source_type, source_name, num_bytes):
             existing_record = next(i for i in records if i[:5] == base_record)
             existing_record[5] += int(num_bytes)
         except StopIteration:
-            existing_record = base_record + [int(num_bytes)]
+            records.append(base_record + [int(num_bytes)])
         try:
             kv_store.set_key_value('pull_push_records', records)
         except Exception:
