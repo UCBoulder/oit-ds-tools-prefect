@@ -90,58 +90,6 @@ def get(endpoint: str,
         return pd.DataFrame(data)
     return data
 
-@task(name='rest.post')
-def post(endpoint: str, connection_info: dict, data=None, json=None, files=None):
-    """Sends a POST request along with any data and returns the JSON response. See requests.post
-    for more details."""
-
-    info = connection_info.copy()
-    domain = info.pop('domain')
-    url = domain + endpoint
-    prefect.context.get('logger').info(f'REST: Sending POST to {url} ...')
-    auth = info.pop('auth', None)
-    kwargs = {'headers': info}
-    if auth:
-        kwargs['auth'] = auth
-    if data:
-        kwargs['data'] = data
-    if json:
-        kwargs['json'] = json
-    if files:
-        kwargs['files'] = files
-    response = requests.post(url, **kwargs)
-    response.raise_for_status()
-    size = len(response.request.body)
-    prefect.context.get('logger').info(f'REST: Sent {sizeof_fmt(size)} bytes')
-    util.record_push('rest', domain, size)
-    return response.json()
-
-@task(name='rest.put')
-def put(endpoint: str, connection_info: dict, data=None, json=None, files=None):
-    """Sends a PUT request along with any data and returns the JSON response. See requests.put
-    for more details."""
-
-    info = connection_info.copy()
-    domain = info.pop('domain')
-    url = domain + endpoint
-    prefect.context.get('logger').info(f'REST: Sending PUT to {url} ...')
-    auth = info.pop('auth', None)
-    kwargs = {'headers': info}
-    if auth:
-        kwargs['auth'] = auth
-    if data:
-        kwargs['data'] = data
-    if json:
-        kwargs['json'] = json
-    if files:
-        kwargs['files'] = files
-    response = requests.put(url, **kwargs)
-    response.raise_for_status()
-    size = len(response.request.body)
-    prefect.context.get('logger').info(f'REST: Sent {sizeof_fmt(size)} bytes')
-    util.record_push('rest', domain, size)
-    return response.json()
-
 @task(name='rest.delete')
 def delete(endpoint: str, connection_info: dict):
     """Sends a DELETE request and returns the JSON response. See requests.delete for more details.
@@ -157,4 +105,48 @@ def delete(endpoint: str, connection_info: dict):
         kwargs['auth'] = auth
     response = requests.delete(url, **kwargs)
     response.raise_for_status()
+    return response.json()
+
+@task(name='rest.post')
+def post(endpoint: str, connection_info: dict, data=None, json=None, files=None):
+    """Sends a POST request along with any data and returns the JSON response. See requests.post
+    for more details."""
+
+    _send_modify_request(requests.post, endpoint, connection_info, data, json, files)
+
+@task(name='rest.put')
+def put(endpoint: str, connection_info: dict, data=None, json=None, files=None):
+    """Sends a PUT request along with any data and returns the JSON response. See requests.put
+    for more details."""
+
+    _send_modify_request(requests.put, endpoint, connection_info, data, json, files)
+
+@task(name='rest.patch')
+def patch(endpoint: str, connection_info: dict, data=None, json=None, files=None):
+    """Sends a PATCH request along with any data and returns the JSON response. See requests.patch
+    for more details."""
+
+    _send_modify_request(requests.patch, endpoint, connection_info, data, json, files)
+
+def _send_modify_request(method, endpoint, connection_info, data, json, files):
+    # pylint:disable=too-many-arguments
+    info = connection_info.copy()
+    domain = info.pop('domain')
+    url = domain + endpoint
+    prefect.context.get('logger').info(f'REST: Sending {method.__name__.upper()} to {url} ...')
+    auth = info.pop('auth', None)
+    kwargs = {'headers': info}
+    if auth:
+        kwargs['auth'] = auth
+    if data:
+        kwargs['data'] = data
+    if json:
+        kwargs['json'] = json
+    if files:
+        kwargs['files'] = files
+    response = method(url, **kwargs)
+    response.raise_for_status()
+    size = len(response.request.body)
+    prefect.context.get('logger').info(f'REST: Sent {sizeof_fmt(size)} bytes')
+    util.record_push('rest', domain, size)
     return response.json()
