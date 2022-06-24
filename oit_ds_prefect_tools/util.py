@@ -65,47 +65,6 @@ def send_email(addressed_to: str, subject: str, body: str, attachments: list, sm
         info += f":\n{body[:500]} ..."
         prefect.context.get('logger').warn(info)
 
-def failure_notifier(smtp_info_keyname: str, contacts_param: str) -> Callable:
-    """Returns a function which can be passed to a Flow's on_failure argument in order to send
-    a failure notification email. SMTP configuration info is extracted from the flow context using
-    get_config_value. SMTP server info must include "host", "port", and "from" keys. Contacts is
-    a string of email addresses separated by ", " and is extracted from the flow parameter
-    named by contacts_param."""
-
-    def send_notification(flow, state):
-        body = 'This prefect flow has failed. View logs in Prefect Cloud for more details.\n\n'
-        body += f'Error message: {state.result}\n\n'
-        # Try to get task-specific details
-        try:
-            task_results = "\n".join([f'{k.name}: {v.message}' for k, v in state.result.items()])
-            if task_results:
-                body += f'\n\nTask results:\n\n{task_results}'
-        except AttributeError:
-            pass
-        smtp_info = get_config_value(smtp_info_keyname)
-        contacts = prefect.context.get("parameters")[contacts_param]
-        msg = MIMEMultipart()
-        msg["from"] = smtp_info['from']
-        msg["to"] = contacts
-        msg["subject"] = (f'[{prefect.context.get("parameters")["env"].upper()}] ' +
-                          f'{flow.name}: FAILURE')
-        msg.attach(MIMEText(body))
-
-        if contacts:
-            prefect.context.get('logger').info(
-                f'Emailing failure notification to {contacts}:\n'
-                f'SUBJECT: {msg["subject"]}\n\n{body}')
-            mailserver = smtplib.SMTP(smtp_info['host'], smtp_info['port'])
-            mailserver.sendmail(smtp_info['from'].split(', '),
-                                contacts.split(', '),
-                                msg.as_string())
-            mailserver.quit()
-        else:
-            prefect.context.get('logger').info(
-                'No contacts set; logging notification instead of sending:\n'
-                f'SUBJECT: {msg["subject"]}\n\n{body}')
-    return send_notification
-
 def run_local(flow, mode='run', argv=None, **kwargs):
     """Runs the flow locally, or if mode="visualize", does that instead. Keyword arguments
     translate into the flow parameters. Or pass a list for argv and these will be parsed as
