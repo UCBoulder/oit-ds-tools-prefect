@@ -7,7 +7,6 @@ import email
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
-from typing import Callable
 from datetime import datetime
 
 import prefect
@@ -134,28 +133,19 @@ def reveal_secrets(config: dict) -> dict:
             out[key] = value
     return out
 
-def _get_flow_record(source_sink_records):
-    flow_name = prefect.context.get('flow_name')
-    if flow_name not in source_sink_records:
-        source_sink_records[flow_name] = {}
-    run_id = prefect.context.get('flow_run_id')
-    if run_id not in source_sink_records[flow_name]:
-        source_sink_records[flow_name][run_id] = {'sources':[], 'sinks': []}
-    return source_sink_records[flow_name][run_id]
-
 def record_pull(source_type, source_name, num_bytes):
     """Makes a record in Prefect Cloud that data was pulled from a source system within a Flow
     context. Be sure to call this function if you ever write your own extraction task outside this
     package. Does nothing if the flow's "env" param is not "prod"."""
 
-    _make_record('pull', source_type, source_name, num_bytes)
+    _make_record('pull', str(source_type), str(source_name), int(num_bytes))
 
 def record_push(sink_type, sink_name, num_bytes):
     """Makes a record in Prefect Cloud that data was pushed to a sink system within a Flow
     context. Be sure to call this function if you ever write your own extraction task outside this
     package. Does nothing if the flow's "env" param is not "prod"."""
 
-    _make_record('push', sink_type, sink_name, num_bytes)
+    _make_record('push', str(sink_type), str(sink_name), int(num_bytes))
 
 def _make_record(record_type, source_type, source_name, num_bytes):
     # pylint:disable=broad-except
@@ -168,19 +158,19 @@ def _make_record(record_type, source_type, source_name, num_bytes):
             # Not connected to Cloud: just do nothing
             return
         # Combine identical records within the same hour
-        time = datetime.now().strftime("%Y-%m-%dT%H:00:00")
+        time = datetime.utcnow().strftime("%Y-%m-%dT%H:00:00")
         base_record = [record_type, prefect.context.get('flow_name'), source_type, source_name,
                        time]
         try:
             existing_record = next(i for i in records if i[:5] == base_record)
-            existing_record[5] += int(num_bytes)
+            existing_record[5] += num_bytes
         except StopIteration:
-            records.append(base_record + [int(num_bytes)])
+            records.append(base_record + [num_bytes])
         try:
             kv_store.set_key_value('pull_push_records', records)
         except Exception:
             prefect.context.get('logger').warn(
-                f'Exception while recording sink data push:\n{traceback.format_exc()}')
+                f'Exception while recording sink data {record_type}:\n{traceback.format_exc()}')
 
 def sizeof_fmt(num):
     """Takes a number of bytes and returns a human-readable representation"""
