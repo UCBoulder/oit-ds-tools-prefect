@@ -151,7 +151,8 @@ def _make_record(record_type, source_type, source_name, num_bytes):
     # pylint:disable=broad-except
     if prefect.context.get('parameters')['env'] == 'prod':
         try:
-            records = kv_store.get_key_value('pull_push_records')
+            # Convert the BoxList to a native list to avoid JSON dump issues
+            records = kv_store.get_key_value('pull_push_records').to_list()
         except ValueError:
             records = []
         except ClientError:
