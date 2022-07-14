@@ -16,7 +16,6 @@ import cx_Oracle
 from prefect import task
 from prefect.engine import signals
 import pandas as pd
-import numpy as np
 
 from . import util
 
@@ -45,6 +44,7 @@ def sql_extract(sql_query: str,
         given, this also determines rows per Parquet file.
     :return: Either a DataFrame result or a list of pickle filenames
     """
+    # pylint:disable=too-many-arguments
 
     info = connection_info.copy()
     function = _switch(info,
@@ -58,16 +58,28 @@ def insert(
         dataframe: pd.DataFrame,
         table_identifier: str,
         connection_info: dict,
-        kill_and_fill: bool =False) -> pd.DataFrame:
+        kill_and_fill: bool =False,
+        max_error_proportion: float =.05) -> pd.DataFrame:
     """Takes a dataframe and table identifier (schema.table) and appends the data into that table.
-    If kill_and_fill is true, deletes all rows from thet able before inserting. Dataframe columns
-    must match table column names.
+    If kill_and_fill is true, deletes all rows from the table before inserting. If more than the
+    max_error_proportion of insert rows fail, the entire transaction is rolled back and the task
+    fails. Dataframe columns must match table column names, though order is irrelevant.
     """
 
     info = connection_info.copy()
     function = _switch(info,
                        oracle=oracle_insert)
-    return function(dataframe, table_identifier, info, kill_and_fill)
+    return function(dataframe, table_identifier, info, kill_and_fill, max_error_proportion)
+
+@task(name="database.execute_sql")
+def execute_sql(sql_statement: str, connection_info: dict, query_params=None):
+    """Executes the given SQL statement, with an optional list or dict specifying the values of
+    bind variables for the query."""
+
+    info = connection_info.copy()
+    function = _switch(info,
+                       oracle=oracle_execute_sql)
+    return function(sql_statement, info, query_params)
 
 def _switch(connection_info, **kwargs):
     for key, value in kwargs.items():
@@ -112,6 +124,10 @@ def oracle_sql_extract(sql_query: str,
                        chunksize: int =1000) -> pd.DataFrame:
     """Returns a DataFrame derived from a SQL SELECT statement executed against the given
     database. Connection encoding is automatically set to utf-8 if missing."""
+    # pylint:disable=too-many-statements
+    # pylint:disable=too-many-branches
+    # pylint:disable=too-many-locals
+    # pylint:disable=too-many-arguments
 
     if lob_columns is None:
         lob_columns = []
@@ -183,11 +199,14 @@ def oracle_insert(
         dataframe: pd.DataFrame,
         table_identifier: str,
         connection_info: dict,
-        kill_and_fill: bool =False) -> pd.DataFrame:
+        kill_and_fill: bool =False,
+        max_error_proportion: float=.05) -> pd.DataFrame:
     """Takes a dataframe and table identifier (schema.table) and inserts the data into that table.
-    If kill_and_fill is true, deletes all rows from the table before inserting. Dataframe columns
-    must match table column names.
+    If kill_and_fill is true, deletes all rows from the table before inserting. If more than the
+    max_error_proportion of insert rows fail, the entire transaction is rolled back. Dataframe
+    columns must match table column names, though order is irrelevant.
     """
+    # pylint:disable=too-many-locals
 
     batch_size = 500
     errors = 0
@@ -198,7 +217,8 @@ def oracle_insert(
         connection_info['encoding'] = 'UTF-8'
 
     # Replace NA values with None and turn to list of dicts
-    records = dataframe.fillna(np.nan).replace([np.nan], [None]).to_dict('records')
+    records = [{k:None if pd.isnull(v) else v for k, v in i.items()}
+               for i in dataframe.to_dict('records')]
 
     with cx_Oracle.connect(**connection_info) as conn:
         host = _oracle_host(conn.dsn)
@@ -218,7 +238,14 @@ def oracle_insert(
                         f'Oracle: Database error {error.message} while inserting data '
                         f'{to_insert[error.offset]}')
                 errors += len(batch_errors)
-            conn.commit()
+            error_proportion = float(errors) / float(len(records))
+            if error_proportion > max_error_proportion:
+                prefect.context.get('logger').error(
+                    f'{error_proportion:.0%} of insert actions failed, exceeding the set max '
+                    f'({max_error_proportion:.0%}); rolling back transaction.')
+                conn.rollback()
+            else:
+                conn.commit()
 
     # Logging
     if errors > 10:
@@ -229,3 +256,45 @@ def oracle_insert(
     util.record_push('oracle', host, sum(dataframe.memory_usage()))
     if errors:
         raise signals.FAIL(f'Failed to insert {errors} records')
+
+def oracle_execute_sql(sql_statement, connection_info: dict, query_params=None):
+    """Executes the given SQL statement str, with an optional list or dict specifying the values of
+    bind variables for the query. Or, sql_statement can be a list of str and query_params a list
+    of lists or dicts, in which case the statements will be executed in order as one transaction,
+    rolling back if any fail."""
+
+    _make_oracle_dsn(connection_info)
+    if 'encoding' not in connection_info:
+        connection_info['encoding'] = 'UTF-8'
+
+    with cx_Oracle.connect(**connection_info) as conn:
+        host = _oracle_host(conn.dsn)
+        cursor = conn.cursor()
+        if isinstance(sql_statement, str):
+            sql_statement = [sql_statement]
+            query_params = [query_params]
+
+        try:
+            for sql, params in zip(sql_statement, query_params):
+                sql_snip = ' '.join(sql.split())[:200] + ' ...'
+                log_str = f"Oracle: Executing on {host}: {sql_snip}"
+                if params:
+                    log_str += f'\nwith injected params: {params}'
+                prefect.context.get('logger').info(log_str)
+                if params:
+                    cursor.execute(sql, parameters=params)
+                else:
+                    cursor.execute(sql)
+
+        except cx_Oracle.DatabaseError as exc:
+            try:
+                offset = exc.args[0].offset
+            except (IndexError, AttributeError):
+                pass
+            else:
+                prefect.context.get('logger').error(
+                    f'Oracle: Database error - {exc}\n{_sql_error(sql, offset)}')
+            conn.rollback()
+            raise
+        else:
+            conn.commit()
