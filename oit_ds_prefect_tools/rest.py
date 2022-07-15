@@ -56,7 +56,10 @@ def get(endpoint: str,
     auth = info.pop('auth', None)
     kwargs = {'headers': info}
     if auth:
-        kwargs['auth'] = auth
+        if isinstance(auth, list):
+            kwargs['auth'] = tuple(auth)
+        else:
+            kwargs['auth'] = auth
     if params:
         kwargs['params'] = params
     size = 0
