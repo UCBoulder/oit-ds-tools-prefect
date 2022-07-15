@@ -118,7 +118,7 @@ def reveal_secrets(config) -> dict:
 
     def recursive_reveal(obj):
         if isinstance(obj, dict):
-            return {k:recursive_reveal(v) for k, v in obj.items}
+            return {k:recursive_reveal(v) for k, v in obj.items()}
         if isinstance(obj, list):
             return [recursive_reveal(i) for i in obj]
         if isinstance(obj, str) and obj.startswith('<secret>'):
