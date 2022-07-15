@@ -106,7 +106,10 @@ def delete(endpoint: str, connection_info: dict):
     auth = info.pop('auth', None)
     kwargs = {'headers': info}
     if auth:
-        kwargs['auth'] = auth
+        if isinstance(auth, list):
+            kwargs['auth'] = tuple(auth)
+        else:
+            kwargs['auth'] = auth
     response = requests.delete(url, **kwargs)
     response.raise_for_status()
     return response.json()
@@ -141,7 +144,10 @@ def _send_modify_request(method, endpoint, connection_info, data, json, files):
     auth = info.pop('auth', None)
     kwargs = {'headers': info}
     if auth:
-        kwargs['auth'] = auth
+        if isinstance(auth, list):
+            kwargs['auth'] = tuple(auth)
+        else:
+            kwargs['auth'] = auth
     if data:
         kwargs['data'] = data
     if json:
