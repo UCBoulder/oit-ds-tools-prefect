@@ -46,6 +46,7 @@ def get(endpoint: str,
     """
     # pylint:disable=too-many-arguments
     # pylint:disable=too-many-locals
+    # pylint:disable=too-many-branches
 
     if not next_page_getter:
         next_page_getter = lambda _: None
@@ -115,21 +116,21 @@ def post(endpoint: str, connection_info: dict, data=None, json=None, files=None)
     """Sends a POST request along with any data and returns the JSON response. See requests.post
     for more details."""
 
-    _send_modify_request(requests.post, endpoint, connection_info, data, json, files)
+    return _send_modify_request(requests.post, endpoint, connection_info, data, json, files)
 
 @task(name='rest.put')
 def put(endpoint: str, connection_info: dict, data=None, json=None, files=None):
     """Sends a PUT request along with any data and returns the JSON response. See requests.put
     for more details."""
 
-    _send_modify_request(requests.put, endpoint, connection_info, data, json, files)
+    return _send_modify_request(requests.put, endpoint, connection_info, data, json, files)
 
 @task(name='rest.patch')
 def patch(endpoint: str, connection_info: dict, data=None, json=None, files=None):
     """Sends a PATCH request along with any data and returns the JSON response. See requests.patch
     for more details."""
 
-    _send_modify_request(requests.patch, endpoint, connection_info, data, json, files)
+    return _send_modify_request(requests.patch, endpoint, connection_info, data, json, files)
 
 def _send_modify_request(method, endpoint, connection_info, data, json, files):
     # pylint:disable=too-many-arguments
