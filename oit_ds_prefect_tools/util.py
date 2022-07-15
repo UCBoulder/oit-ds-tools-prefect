@@ -111,27 +111,23 @@ def get_config_value(key: str):
             f'Extracting value for "{key}" from KV Store since it is not set in Flow Context')
         return kv_store.get_key_value(key)
 
-def reveal_secrets(config: dict) -> dict:
-    """Looks for <secret> values and replaces these with Secret values from Prefect"""
+def reveal_secrets(config) -> dict:
+    """Looks for strings within a JSON-like object that start with '<secret>' and replaces these
+    with Prefect Secrets. For example, the value '<secret>EDB_PW' would be replaced with the EDB_PW
+    Prefect Secret value."""
 
-    out = {}
-    for key, value in config.items():
-        if isinstance(value, str) and value.startswith('<secret>'):
+    def recursive_reveal(obj):
+        if isinstance(obj, dict):
+            return {k:recursive_reveal(v) for k, v in obj.items}
+        if isinstance(obj, list):
+            return [recursive_reveal(i) for i in obj]
+        if isinstance(obj, str) and obj.startswith('<secret>'):
             prefect.context.get('logger').info(
-                f'Extracting value for {value[8:]} from Prefect Secrets')
-            out[key] = Secret(value[8:]).get()
-        elif isinstance(value, dict):
-            out[key] = {}
-            for skey, sval in value.items():
-                if isinstance(sval, str) and sval.startswith('<secret>'):
-                    prefect.context.get('logger').info(
-                        f'Extracting value for {sval[8:]} from Prefect Secrets')
-                    out[key][skey] = Secret(sval[8:]).get()
-                else:
-                    out[key][skey] = sval
-        else:
-            out[key] = value
-    return out
+                f'Extracting value for {obj[8:]} from Prefect Secrets')
+            return Secret(obj[8:]).get()
+        return obj
+
+    return recursive_reveal(config)
 
 def record_pull(source_type, source_name, num_bytes):
     """Makes a record in Prefect Cloud that data was pulled from a source system within a Flow
