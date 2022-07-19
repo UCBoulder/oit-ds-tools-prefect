@@ -314,7 +314,7 @@ def oracle_execute_sql(sql_statement, connection_info: dict, query_params=None):
 
 def _oracle_execute_statements(conn, cursor, host, statements, query_params=None):
     if query_params is None:
-        query_params = [None * len(statements)]
+        query_params = [None] * len(statements)
     try:
         for sql, params in zip(statements, query_params):
             sql_snip = ' '.join(sql.split())[:200] + ' ...'
