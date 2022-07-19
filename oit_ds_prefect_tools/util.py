@@ -19,15 +19,19 @@ from prefect.exceptions import ClientError
 import git
 
 @task
-def send_email(addressed_to: str, subject: str, body: str, attachments: list, smtp_info: dict):
+def send_email(addressed_to: str,
+               subject: str,
+               body: str,
+               smtp_info: dict,
+               attachments: list =None):
     """Sends an email.
 
     :param addressed_to: A list of emails to send to separated by ", "
     :param subject: Email subject
     :param body: Plain text email body
+    :param smtp_info: Dict with keys "from" (sender email), "host", and "port"
     :param attachments: List of (bytes, str) tuples giving the file contents and the filename of
         objects to attach
-    :param smtp_info: Dict with keys "from" (sender email), "host", and "port"
     """
 
     msg = MIMEMultipart()
@@ -36,12 +40,13 @@ def send_email(addressed_to: str, subject: str, body: str, attachments: list, sm
     msg["Subject"] = subject
     msg.attach(MIMEText(body))
 
-    for contents, filename in attachments:
-        obj = MIMEBase("application", "octet-stream")
-        obj.set_payload(contents)
-        email.encoders.encode_base64(obj)
-        obj.add_header("Content-Disposition", f"attachment; filename= {filename}")
-        msg.attach(obj)
+    if attachments:
+        for contents, filename in attachments:
+            obj = MIMEBase("application", "octet-stream")
+            obj.set_payload(contents)
+            email.encoders.encode_base64(obj)
+            obj.add_header("Content-Disposition", f"attachment; filename= {filename}")
+            msg.attach(obj)
 
     mailserver = smtplib.SMTP(smtp_info['host'], smtp_info['port'])
 
