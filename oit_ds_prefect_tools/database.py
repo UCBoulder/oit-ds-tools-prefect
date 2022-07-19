@@ -60,8 +60,7 @@ def insert(
         connection_info: dict,
         pre_insert_statements: list[str] =None,
         pre_insert_params: list =None,
-        max_error_proportion: float =.05,
-        next_val_columns: list[str] =None) -> pd.DataFrame:
+        max_error_proportion: float =.05) -> pd.DataFrame:
     """Takes a dataframe and table identifier and appends the data into that table.
     Dataframe columns must match table column names (case insensitive, order irrelevant).
 
@@ -74,9 +73,6 @@ def insert(
         each pre-insert statement (aka bind variables)
     :param max_error_proportion: If the proportion of failed insert rows is greater than this, the
         entire transaction is rolled back (including pre-insert statements) and the task fails
-    :param next_val_columns: A list of column names which are not in the dataframe, but which should
-        be inserted into the database table using each column's "nextval" function (i.e. filling
-        it with incremental values)
     """
     # pylint:disable=too-many-arguments
 
@@ -88,8 +84,7 @@ def insert(
                     info,
                     pre_insert_statements,
                     pre_insert_params,
-                    max_error_proportion,
-                    next_val_columns)
+                    max_error_proportion)
 
 @task(name="database.execute_sql")
 def execute_sql(sql_statement: str, connection_info: dict, query_params=None):
@@ -221,8 +216,7 @@ def oracle_insert(
         connection_info: dict,
         pre_insert_statements: list[str] =None,
         pre_insert_params: list =None,
-        max_error_proportion: float =.05,
-        next_val_columns: list[str] =None) -> pd.DataFrame:
+        max_error_proportion: float =.05) -> pd.DataFrame:
     """Takes a dataframe and table identifier and appends the data into that table.
     Dataframe columns must match table column names (case insensitive, order irrelevant).
 
@@ -235,9 +229,6 @@ def oracle_insert(
         each pre-insert statement (aka bind variables)
     :param max_error_proportion: If the proportion of failed insert rows is greater than this, the
         entire transaction is rolled back (including pre-insert statements) and the task fails
-    :param next_val_columns: A list of column names which are not in the dataframe, but which should
-        be inserted into the database table using each column's "nextval" function (i.e. filling
-        it with incremental values)
     """
     # pylint:disable=too-many-locals
     # pylint:disable=too-many-arguments
