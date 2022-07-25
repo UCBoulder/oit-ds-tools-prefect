@@ -17,6 +17,7 @@ import prefect
 from prefect import task
 from prefect.engine import signals
 import requests
+from requests.exceptions import JSONDecodeError
 import pandas as pd
 
 from . import util
@@ -72,7 +73,10 @@ def get(endpoint: str,
                 f'Received {response.status_code} response; skipping task: {response.text}')
         response.raise_for_status()
         size += len(response.content)
-        result = response.json()
+        try:
+            result = response.json()
+        except JSONDecodeError:
+            result = response.content
         if isinstance(result, list):
             data += result
         else:
@@ -95,7 +99,7 @@ def get(endpoint: str,
     return data
 
 @task(name='rest.delete')
-def delete(endpoint: str, connection_info: dict):
+def delete(endpoint: str, connection_info: dict, params: dict =None):
     """Sends a DELETE request and returns the JSON response. See requests.delete for more details.
     """
 
@@ -110,9 +114,14 @@ def delete(endpoint: str, connection_info: dict):
             kwargs['auth'] = tuple(auth)
         else:
             kwargs['auth'] = auth
+    if params:
+        kwargs['params'] = params
     response = requests.delete(url, **kwargs)
     response.raise_for_status()
-    return response.json()
+    try:
+        return response.json()
+    except JSONDecodeError:
+        return response.content
 
 @task(name='rest.post')
 def post(endpoint: str, connection_info: dict, data=None, json=None, files=None):
@@ -159,4 +168,7 @@ def _send_modify_request(method, endpoint, connection_info, data, json, files):
     size = len(response.request.body)
     prefect.context.get('logger').info(f'REST: Sent {sizeof_fmt(size)} bytes')
     util.record_push('rest', domain, size)
-    return response.json()
+    try:
+        return response.json()
+    except JSONDecodeError:
+        return response.content
