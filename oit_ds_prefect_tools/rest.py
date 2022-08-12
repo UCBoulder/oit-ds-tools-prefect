@@ -12,12 +12,12 @@ Basic Authentication. These values are simply passed to the requests module's fu
 """
 
 from typing import Callable
+from json.decoder import JSONDecodeError
 
 import prefect
 from prefect import task
 from prefect.engine import signals
 import requests
-from requests.exceptions import JSONDecodeError
 import pandas as pd
 
 from . import util
