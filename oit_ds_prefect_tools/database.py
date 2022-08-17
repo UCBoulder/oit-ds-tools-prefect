@@ -72,7 +72,7 @@ def insert(
     :param pre_insert_params: An optional list of query parameters (lists or dicts) to go along with
         each pre-insert statement (aka bind variables)
     :param max_error_proportion: If the proportion of failed insert rows is greater than this, the
-        entire transaction is rolled back (including pre-insert statements) and the task fails
+        entire transaction is rolled back (including pre-insert statements)
     """
     # pylint:disable=too-many-arguments
 
@@ -169,7 +169,7 @@ def oracle_sql_extract(sql_query: str,
         cursor.arraysize = chunksize
         try:
             if query_params:
-                cursor.execute(sql_query, parameters=query_params)
+                cursor.execute(sql_query, query_params)
             else:
                 cursor.execute(sql_query)
             columns = [i[0].lower() for i in cursor.description]
@@ -228,7 +228,7 @@ def oracle_insert(
     :param pre_insert_params: An optional list of query parameters (lists or dicts) to go along with
         each pre-insert statement (aka bind variables)
     :param max_error_proportion: If the proportion of failed insert rows is greater than this, the
-        entire transaction is rolled back (including pre-insert statements) and the task fails
+        entire transaction is rolled back (including pre-insert statements)
     """
     # pylint:disable=too-many-locals
     # pylint:disable=too-many-arguments
