@@ -113,8 +113,8 @@ def get_many(endpoints: list[str],
     # single-threaded
     if num_workers == 1:
         results =  [
-            _soft_catch(
-                _get(endpoint, connection_info, params, next_page_getter, to_dataframe, log=False))
+            _soft_catch(_get)(endpoint, connection_info, params, next_page_getter, to_dataframe,
+                log=False)
             for endpoint, params in zip(endpoints, params_list)
             ]
 
@@ -153,7 +153,11 @@ def get_many(endpoints: list[str],
             f'REST: Encountered {len(failures)} exceptions while sending requests. Only the first '
             'will be raised.')
         raise failures[0]
-    return filled_results
+    util.record_pull(
+        'rest',
+        connection_info['domain'],
+        sum([size for response, size in filled_results]))
+    return [response for response, size in filled_results]
 
 @task(name='rest.post_many')
 def post_many(endpoints: list[str],
@@ -310,10 +314,14 @@ def _get(endpoint, connection_info, params, next_page_getter, to_dataframe, code
 
     if log:
         prefect.context.get('logger').info(f'REST: Received {len(data)} objects')
-    util.record_pull('rest', domain, size)
+        util.record_pull('rest', domain, size)
+        if to_dataframe:
+            return pd.DataFrame(data)
+        return data
+    # If this function isn't logging data directly, return the domain so it can be logged
     if to_dataframe:
-        return pd.DataFrame(data)
-    return data
+        return pd.DataFrame(data), size
+    return data, size
 
 def _get_mappable(kwargs):
     return _get(**kwargs)
@@ -345,11 +353,16 @@ def _send_modify_request(method, endpoint, connection_info, params, data, json, 
     size = len(response.request.body)
     if log:
         prefect.context.get('logger').info(f'REST: Sent {sizeof_fmt(size)} bytes')
-    util.record_push('rest', domain, size)
+        util.record_push('rest', domain, size)
+        try:
+            return response.json()
+        except JSONDecodeError:
+            return response.content
+    # If this function isn't logging data directly, return the domain so it can be logged
     try:
-        return response.json()
+        return response.json(), size
     except JSONDecodeError:
-        return response.content
+        return response.content, size
 
 def _send_modify_requests(
         method,
@@ -426,6 +439,7 @@ def _send_modify_requests(
                 except StopIteration:
                     break
 
+    # return results
     prefect.context.get('logger').info(f'REST: Received {len(results)} responses')
     failures = [i for i in results if isinstance(i, BaseException)]
     if failures:
@@ -433,12 +447,17 @@ def _send_modify_requests(
             f'REST: Encountered {len(failures)} exceptions while sending requests. Only the first '
             'will be raised.')
         raise failures[0]
-    return results
+    util.record_push(
+        'rest',
+        connection_info['domain'],
+        sum([size for response, size in results]))
+    return [response for response, size in results]
 
 def _send_mappable(kwargs):
     return _send_modify_request(**kwargs)
 
 def _soft_catch(function):
+    # pylint:disable=broad-except
     # Modify the function to return exceptions instead of raising them
     def modified(*args, **kwargs):
         try:
