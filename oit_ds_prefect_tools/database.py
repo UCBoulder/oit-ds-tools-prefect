@@ -86,6 +86,42 @@ def insert(
                     pre_insert_params,
                     max_error_proportion)
 
+@task(name="database.insert")
+def update(
+        dataframe: pd.DataFrame,
+        table_identifier: str,
+        match_on: list,
+        connection_info: dict,
+        pre_update_statements: list[str] =None,
+        pre_update_params: list =None,
+        max_error_proportion: float =.05) -> pd.DataFrame:
+    """Takes a dataframe and table identifier and updates the data into that table.
+
+    :param dataframe: The data to insert
+    :param table_identifier: The table to insert into (`schema.table`)
+    :param match on: A list of columns for matching. Every other column of the dataframe is used
+        to update the matching row of the database table. Case insensitive.
+    :param connection_info: The database connection info dict (see module docstring)
+    :param pre_update_statements: An optional list of sql statements to execute before updating;
+        for example, to delete rows
+    :param pre_update_params: An optional list of query parameters (lists or dicts) to go along with
+        each pre-update statement (aka bind variables)
+    :param max_error_proportion: If the proportion of failed insert rows is greater than this, the
+        entire transaction is rolled back (including pre-insert statements)
+    """
+    # pylint:disable=too-many-arguments
+
+    info = connection_info.copy()
+    function = _switch(info,
+                       oracle=oracle_update)
+    return function(dataframe,
+                    table_identifier,
+                    match_on,
+                    info,
+                    pre_update_statements,
+                    pre_update_params,
+                    max_error_proportion)
+
 @task(name="database.execute_sql")
 def execute_sql(sql_statement: str, connection_info: dict, query_params=None):
     """Executes the given SQL statement, with an optional list or dict specifying the values of
@@ -143,8 +179,7 @@ def oracle_sql_extract(sql_query: str,
                        lob_columns: list =None,
                        chunks_prefix: str =None,
                        chunksize: int =1000) -> pd.DataFrame:
-    """Returns a DataFrame derived from a SQL SELECT statement executed against the given
-    database. Connection encoding is automatically set to utf-8 if missing."""
+    """Oracle-specific implementation of the sql_extract task"""
     # pylint:disable=too-many-statements
     # pylint:disable=too-many-branches
     # pylint:disable=too-many-locals
@@ -217,19 +252,7 @@ def oracle_insert(
         pre_insert_statements: list[str] =None,
         pre_insert_params: list =None,
         max_error_proportion: float =.05) -> pd.DataFrame:
-    """Takes a dataframe and table identifier and appends the data into that table.
-    Dataframe columns must match table column names (case insensitive, order irrelevant).
-
-    :param dataframe: The data to insert
-    :param table_identifier: The table to insert into (`schema.table`)
-    :param connection_info: The database connection info dict (see module docstring)
-    :param pre_insert_statements: An optional list of sql statements to execute before inserting;
-        for example, to delete certain rows
-    :param pre_insert_params: An optional list of query parameters (lists or dicts) to go along with
-        each pre-insert statement (aka bind variables)
-    :param max_error_proportion: If the proportion of failed insert rows is greater than this, the
-        entire transaction is rolled back (including pre-insert statements)
-    """
+    """Oracle-specific implementation of the insert task"""
     # pylint:disable=too-many-locals
     # pylint:disable=too-many-arguments
 
@@ -284,11 +307,74 @@ def oracle_insert(
     if errors:
         raise signals.FAIL(f'Failed to insert {errors} records')
 
+def oracle_update(
+        dataframe: pd.DataFrame,
+        table_identifier: str,
+        match_on: list,
+        connection_info: dict,
+        pre_update_statements: list[str] =None,
+        pre_update_params: list =None,
+        max_error_proportion: float =.05) -> pd.DataFrame:
+    """Oracle-specific implementation of the update task"""
+    # pylint:disable=too-many-locals
+    # pylint:disable=too-many-arguments
+
+    batch_size = 500
+    errors = 0
+    set_columns = [i for i in dataframe.columns if i not in match_on]
+    set_list = [f'{i} = :{i}' for i in set_columns]
+    match_list = ['{i} = :{i}' for i in match_on]
+    update_sql = (f'UPDATE {table_identifier} SET {" ".join(set_list)} ' +
+                  f'WHERE {" AND ".join(match_list)}')
+    _make_oracle_dsn(connection_info)
+    if 'encoding' not in connection_info:
+        connection_info['encoding'] = 'UTF-8'
+    if pre_update_statements is None:
+        pre_update_statements = []
+
+    # Replace NA values with None and turn to list of dicts
+    records = [{k:None if pd.isnull(v) else v for k, v in i.items()}
+               for i in dataframe.to_dict('records')]
+
+    with cx_Oracle.connect(**connection_info) as conn:
+        host = _oracle_host(conn.dsn)
+        cursor = conn.cursor()
+
+        _oracle_execute_statements(conn, cursor, host, pre_update_statements, pre_update_params)
+
+        prefect.context.get('logger').info(
+            f"Oracle: Updating data in {table_identifier} on {host}")
+        # Update records in batches
+        for start in range(0, len(records), batch_size):
+            to_update = records[start : start + batch_size]
+            cursor.executemany(update_sql, to_update, batcherrors=True)
+            batch_errors = cursor.getbatcherrors()
+            for error in batch_errors[:10 - errors]:
+                prefect.context.get('logger').error(
+                    f'Oracle: Database error {error.message} while updating data '
+                    f'{to_update[error.offset]}')
+            errors += len(batch_errors)
+        error_proportion = float(errors) / float(len(records))
+        if error_proportion > max_error_proportion:
+            prefect.context.get('logger').error(
+                f'{error_proportion:.0%} of update actions failed, exceeding the set maximum '
+                f'({max_error_proportion:.0%}); rolling back transaction.')
+            conn.rollback()
+        else:
+            conn.commit()
+
+    # Logging
+    if errors > 10:
+        prefect.context.get('logger').error(
+            f'Oracle: {errors - 10} more database errors while updating not shown')
+    prefect.context.get('logger').info(
+        f"Oracle: Updated {len(records) - errors} rows")
+    util.record_push('oracle', host, sum(dataframe.memory_usage()))
+    if errors:
+        raise signals.FAIL(f'Failed to update {errors} records')
+
 def oracle_execute_sql(sql_statement, connection_info: dict, query_params=None):
-    """Executes the given SQL statement str, with an optional list or dict specifying the values of
-    bind variables for the query. Or, sql_statement can be a list of str and query_params a list
-    of lists or dicts, in which case the statements will be executed in order as one transaction,
-    rolling back if any fail."""
+    """Oracle-specific implementation of the execute_sql task"""
 
     _make_oracle_dsn(connection_info)
     if 'encoding' not in connection_info:
