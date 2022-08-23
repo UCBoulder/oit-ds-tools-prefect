@@ -323,7 +323,7 @@ def oracle_update(
     errors = 0
     set_columns = [i for i in dataframe.columns if i not in match_on]
     set_list = [f'{i} = :{i}' for i in set_columns]
-    match_list = ['{i} = :{i}' for i in match_on]
+    match_list = [f'{i} = :{i}' for i in match_on]
     update_sql = (f'UPDATE {table_identifier} SET {" ".join(set_list)} ' +
                   f'WHERE {" AND ".join(match_list)}')
     _make_oracle_dsn(connection_info)
