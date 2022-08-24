@@ -86,7 +86,7 @@ def insert(
                     pre_insert_params,
                     max_error_proportion)
 
-@task(name="database.insert")
+@task(name="database.update")
 def update(
         dataframe: pd.DataFrame,
         table_identifier: str,
@@ -288,14 +288,15 @@ def oracle_insert(
                     f'Oracle: Database error {error.message} while inserting data '
                     f'{to_insert[error.offset]}')
             errors += len(batch_errors)
-        error_proportion = float(errors) / float(len(records))
-        if error_proportion > max_error_proportion:
-            prefect.context.get('logger').error(
-                f'{error_proportion:.0%} of insert actions failed, exceeding the set maximum '
-                f'({max_error_proportion:.0%}); rolling back transaction.')
-            conn.rollback()
-        else:
-            conn.commit()
+        if records:
+            error_proportion = float(errors) / float(len(records))
+            if error_proportion > max_error_proportion:
+                prefect.context.get('logger').error(
+                    f'{error_proportion:.0%} of insert actions failed, exceeding the set maximum '
+                    f'({max_error_proportion:.0%}); rolling back transaction.')
+                conn.rollback()
+            else:
+                conn.commit()
 
     # Logging
     if errors > 10:
@@ -355,14 +356,15 @@ def oracle_update(
                     f'Oracle: Database error {error.message} while updating data '
                     f'{to_update[error.offset]}')
             errors += len(batch_errors)
-        error_proportion = float(errors) / float(len(records))
-        if error_proportion > max_error_proportion:
-            prefect.context.get('logger').error(
-                f'{error_proportion:.0%} of update actions failed, exceeding the set maximum '
-                f'({max_error_proportion:.0%}); rolling back transaction.')
-            conn.rollback()
-        else:
-            conn.commit()
+        if records:
+            error_proportion = float(errors) / float(len(records))
+            if error_proportion > max_error_proportion:
+                prefect.context.get('logger').error(
+                    f'{error_proportion:.0%} of update actions failed, exceeding the set maximum '
+                    f'({max_error_proportion:.0%}); rolling back transaction.')
+                conn.rollback()
+            else:
+                conn.commit()
 
     # Logging
     if errors > 10:
