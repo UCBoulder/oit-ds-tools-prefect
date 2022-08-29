@@ -350,7 +350,10 @@ def _send_modify_request(method, endpoint, connection_info, params, data, json, 
         kwargs['files'] = files
     response = method(url, **kwargs)
     response.raise_for_status()
-    size = len(response.request.body)
+    if response.request.body:
+        size = len(response.request.body)
+    else:
+        size = 0
     if log:
         prefect.context.get('logger').info(f'REST: Sent {sizeof_fmt(size)} bytes')
         util.record_push('rest', domain, size)
