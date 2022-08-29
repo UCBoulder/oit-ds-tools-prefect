@@ -79,7 +79,7 @@ def delete(endpoint: str, connection_info: dict, params=None, data=None, json=No
     for more details."""
     # pylint:disable=too-many-arguments
 
-    return _send_modify_request(requests.put, endpoint, connection_info, params, data, json, files)
+    return _send_modify_request(requests.delete, endpoint, connection_info, params, data, json, files)
 
 @task(name='rest.get_many')
 def get_many(endpoints: list[str],
