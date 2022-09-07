@@ -4,6 +4,7 @@ Each Prefect task takes a connection_info argument which is a dict identifying t
 connect to. It should always have a "system_type" member identifying one of the following
 supported system:
     - "oracle" for cx_Oracle.connect
+    - "postgre" for psycopg2.connect
 
 The remaining KVs of connection_info should map directly to the keyword arguments used in calling
 the constructor indicated in the list above, with some exceptions:
@@ -11,8 +12,9 @@ the constructor indicated in the list above, with some exceptions:
         string as the "dsn" argument, so instead pass "host", "port", and "sid" individually.
 """
 
-import prefect
 import cx_Oracle
+import psycopg2
+import prefect
 from prefect import task
 from prefect.engine import signals
 import pandas as pd
@@ -48,7 +50,8 @@ def sql_extract(sql_query: str,
 
     info = connection_info.copy()
     function = _switch(info,
-                       oracle=oracle_sql_extract)
+                       oracle=oracle_sql_extract,
+                       postgre=postgre_sql_extract)
     dataframe = function(sql_query, info, query_params, lob_columns, chunks_prefix,
                          chunksize)
     return dataframe
@@ -78,7 +81,8 @@ def insert(
 
     info = connection_info.copy()
     function = _switch(info,
-                       oracle=oracle_insert)
+                       oracle=oracle_insert,
+                       postgre=postgre_insert)
     return function(dataframe,
                     table_identifier,
                     info,
@@ -113,7 +117,8 @@ def update(
 
     info = connection_info.copy()
     function = _switch(info,
-                       oracle=oracle_update)
+                       oracle=oracle_update,
+                       postgre=postgre_update)
     return function(dataframe,
                     table_identifier,
                     match_on,
@@ -129,7 +134,8 @@ def execute_sql(sql_statement: str, connection_info: dict, query_params=None):
 
     info = connection_info.copy()
     function = _switch(info,
-                       oracle=oracle_execute_sql)
+                       oracle=oracle_execute_sql,
+                       postgre=postgre_execute_sql)
     return function(sql_statement, info, query_params)
 
 def _switch(connection_info, **kwargs):
@@ -138,6 +144,12 @@ def _switch(connection_info, **kwargs):
             del connection_info['system_type']
             return value
     raise ValueError(f'System type "{connection_info["system_type"]}" is not supported')
+
+
+##########
+# Oracle functions
+##########
+
 
 def _log_oracle_error(error, sql_query):
     try:
@@ -150,8 +162,6 @@ def _log_oracle_error(error, sql_query):
         message = f'Line {line_no}: {line[:100]}'
         prefect.context.get('logger').error(
             f'Oracle: Database error - {error}\n{message}')
-
-# Oracle functions
 
 def _make_oracle_dsn(connection_info):
     if 'sid' in connection_info:
@@ -410,3 +420,216 @@ def _oracle_execute_statements(conn, cursor, host, statements, query_params=None
         _log_oracle_error(exc, sql)
         conn.rollback()
         raise
+
+
+##########
+# Postgre functions
+##########
+
+
+def postgre_sql_extract(sql_query: str,
+                         connection_info: dict,
+                         query_params=None,
+                         lob_columns: list =None,
+                         chunks_prefix: str =None,
+                         chunksize: int =1000) -> pd.DataFrame:
+    """Postgre-specific implementation of the sql_extract task"""
+    # pylint:disable=too-many-statements
+    # pylint:disable=too-many-branches
+    # pylint:disable=too-many-locals
+    # pylint:disable=too-many-arguments
+
+    if lob_columns:
+        raise ValueError('The lob_columns parameter is not supported for Postgre databases.')
+    with psycopg2.connect(**connection_info) as conn:
+        host = connection_info['host']
+        sql_snip = ' '.join(sql_query.split())[:200] + ' ...'
+        log_str = f"Postgre: Reading from {host}: {sql_snip}"
+        if query_params:
+            log_str += f'\nwith injected params: {query_params}'
+        prefect.context.get('logger').info(log_str)
+
+        cursor = conn.cursor()
+        cursor.arraysize = chunksize
+        if query_params:
+            cursor.execute(sql_query, query_params)
+        else:
+            cursor.execute(sql_query)
+        columns = [i[0].lower() for i in cursor.description]
+
+        if chunks_prefix:
+            count = 0
+            size = 0
+            filenames = []
+            while True:
+                rows = cursor.fetchmany()
+                if not rows:
+                    break
+                data = pd.DataFrame(rows, columns=columns)
+                count += len(data.index)
+                size += sum(data.memory_usage())
+                filename = f'{chunks_prefix}_{len(filenames)}'
+                filenames.append(filename)
+                data.to_pickle(filename)
+        else:
+            rows = cursor.fetchall()
+            data = pd.DataFrame(rows, columns=columns)
+            count = len(data.index)
+            size = sum(data.memory_usage())
+
+        util.record_pull('postgre', host, size)
+        prefect.context.get('logger').info(f'Postgre: Read {count} rows')
+        if chunks_prefix:
+            return filenames
+        return data
+
+def postgre_insert(
+        dataframe: pd.DataFrame,
+        table_identifier: str,
+        connection_info: dict,
+        pre_insert_statements: list[str] =None,
+        pre_insert_params: list =None,
+        max_error_proportion: float =.05) -> pd.DataFrame:
+    """Postgre-specific implementation of the insert task"""
+    # pylint:disable=too-many-locals
+    # pylint:disable=too-many-arguments
+
+    errors = 0
+    insert_sql = (f'INSERT INTO {table_identifier} ({",".join(list(dataframe.columns))}) ' +
+                  f'VALUES ({",".join(":" + i for i in dataframe.columns)})')
+    if pre_insert_statements is None:
+        pre_insert_statements = []
+
+    # Replace NA values with None and turn to list of dicts
+    records = [{k:None if pd.isnull(v) else v for k, v in i.items()}
+               for i in dataframe.to_dict('records')]
+
+    with psycopg2.connect(**connection_info) as conn:
+        host = connection_info['host']
+        cursor = conn.cursor()
+
+        _postgre_execute_statements(cursor, host, pre_insert_statements, pre_insert_params)
+
+        prefect.context.get('logger').info(
+            f"Postgre: Inserting into {table_identifier} on {host}")
+        # Insert records individually
+        for to_insert in records:
+            try:
+                cursor.execute(insert_sql, to_insert)
+            # pylint:disable=broad-except
+            except Exception as err:
+                if errors < 10:
+                    prefect.context.get('logger').error(
+                        f'Postgre: Error while inserting data {to_insert}:\n{err}')
+                errors += 1
+        if records:
+            error_proportion = float(errors) / float(len(records))
+            if error_proportion > max_error_proportion:
+                prefect.context.get('logger').error(
+                    f'{error_proportion:.0%} of insert actions failed, exceeding the set maximum '
+                    f'({max_error_proportion:.0%}); rolling back transaction.')
+                conn.rollback()
+            else:
+                conn.commit()
+
+    # Logging
+    if errors > 10:
+        prefect.context.get('logger').error(
+            f'Postgre: {errors - 10} more database errors while inserting not shown')
+    prefect.context.get('logger').info(
+        f"Postgre: Inserted {len(records) - errors} rows")
+    util.record_push('postgre', host, sum(dataframe.memory_usage()))
+    if errors:
+        raise signals.FAIL(f'Failed to insert {errors} records')
+
+def postgre_update(
+        dataframe: pd.DataFrame,
+        table_identifier: str,
+        match_on: list,
+        connection_info: dict,
+        pre_update_statements: list[str] =None,
+        pre_update_params: list =None,
+        max_error_proportion: float =.05) -> pd.DataFrame:
+    """Postgre-specific implementation of the update task"""
+    # pylint:disable=too-many-locals
+    # pylint:disable=too-many-arguments
+
+    errors = 0
+    set_columns = [i for i in dataframe.columns if i not in match_on]
+    set_list = [f'{i} = :{i}' for i in set_columns]
+    match_list = [f'{i} = :{i}' for i in match_on]
+    update_sql = (f'UPDATE {table_identifier} SET {", ".join(set_list)} ' +
+                  f'WHERE {" AND ".join(match_list)}')
+    prefect.context.get('logger').info(update_sql)
+    if pre_update_statements is None:
+        pre_update_statements = []
+
+    # Replace NA values with None and turn to list of dicts
+    records = [{k:None if pd.isnull(v) else v for k, v in i.items()}
+               for i in dataframe.to_dict('records')]
+
+    with psycopg2.connect(**connection_info) as conn:
+        host = connection_info['host']
+        cursor = conn.cursor()
+
+        _postgre_execute_statements(cursor, host, pre_update_statements, pre_update_params)
+
+        prefect.context.get('logger').info(
+            f"Postgre: Updating data in {table_identifier} on {host}")
+        # Update records individually
+        for to_update in records:
+            try:
+                cursor.execute(update_sql, to_update)
+            # pylint:disable=broad-except
+            except Exception as err:
+                if errors < 10:
+                    prefect.context.get('logger').error(
+                        f'Postgre: Error while updating data {to_update}:\n{err}')
+                errors += 1
+        if records:
+            error_proportion = float(errors) / float(len(records))
+            if error_proportion > max_error_proportion:
+                prefect.context.get('logger').error(
+                    f'{error_proportion:.0%} of update actions failed, exceeding the set maximum '
+                    f'({max_error_proportion:.0%}); rolling back transaction.')
+                conn.rollback()
+            else:
+                conn.commit()
+
+    # Logging
+    if errors > 10:
+        prefect.context.get('logger').error(
+            f'Postgre: {errors - 10} more database errors while updating not shown')
+    prefect.context.get('logger').info(
+        f"Postgre: Updated {len(records) - errors} rows")
+    util.record_push('postgre', host, sum(dataframe.memory_usage()))
+    if errors:
+        raise signals.FAIL(f'Failed to update {errors} records')
+
+def postgre_execute_sql(sql_statement, connection_info: dict, query_params=None):
+    """Postgre-specific implementation of the execute_sql task"""
+
+    if isinstance(sql_statement, str):
+        sql_statement = [sql_statement]
+        query_params = [query_params]
+
+    with psycopg2.connect(**connection_info) as conn:
+        host = connection_info['host']
+        cursor = conn.cursor()
+        _postgre_execute_statements(cursor, host, sql_statement, query_params)
+        conn.commit()
+
+
+def _postgre_execute_statements(cursor, host, statements, query_params=None):
+    if query_params is None:
+        query_params = [None] * len(statements)
+    for sql, params in zip(statements, query_params):
+        sql_snip = ' '.join(sql.split())[:200] + ' ...'
+        log_str = f"Postgre: Executing on {host}: {sql_snip}"
+        if params:
+            log_str += f'\nwith injected params: {params}'
+        prefect.context.get('logger').info(log_str)
+        if params:
+            cursor.execute(sql, parameters=params)
+        else:
+            cursor.execute(sql)
