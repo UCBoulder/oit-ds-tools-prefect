@@ -307,7 +307,10 @@ def _get(endpoint, connection_info, params, next_page_getter, to_dataframe, code
         if isinstance(next_page_info, str):
             url = next_page_info
         elif isinstance(next_page_info, dict):
-            kwargs['params'].update(next_page_info)
+            try:
+                kwargs['params'].update(next_page_info)
+            except KeyError:
+                kwargs['params'] = next_page_info
         else:
             raise TypeError(
                 f'Param next_page_getter must return a str or dict, not {type(next_page_info)}')
