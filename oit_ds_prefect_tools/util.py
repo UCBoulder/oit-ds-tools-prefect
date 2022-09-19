@@ -1,6 +1,8 @@
 """General utility functions to make flows easier to implement with Prefect Cloud"""
 
+import importlib
 import os
+import sys
 import smtplib
 import traceback
 import email
@@ -12,11 +14,13 @@ from datetime import datetime
 import prefect
 from prefect import task
 from prefect.client import Secret
-from prefect import storage
 from prefect.backend import kv_store
-from prefect.run_configs.docker import DockerRun
 from prefect.exceptions import ClientError
+from prefect.deployments import Deployment
+from prefect.filesystems import RemoteFileSystem
 import git
+
+DOCKER_REGISTRY = 'oit-data-services-docker-local.artifactory.colorado.edu/'
 
 @task
 def send_email(addressed_to: str,
@@ -69,39 +73,50 @@ def send_email(addressed_to: str,
         info += f":\n{body[:500]} ..."
         prefect.context.get('logger').warn(info)
 
-def run_local(flow, mode='run', argv=None, **kwargs):
-    """Runs the flow locally, or if mode="visualize", does that instead. Keyword arguments
-    translate into the flow parameters. Or pass a list for argv and these will be parsed as
-    parameters with the format `{name}={value}`."""
+def run_flow_command_line_interface(flow_filename, flow_function_name, args=None):
+    """Provides a command line interface for running and deploying a flow. If args is none, will
+    use sys.argv"""
 
-    flow.storage = None
-    flow.run_config = None
-    if mode == 'visualize':
-        flow.visualize()
+    repo = git.Repo()
+    if args is None:
+        args = sys.argv[1:]
+    command = args[0]
+    options = args[1:]
+    if command == 'deploy':
+        if repo.active_branch.name == "main":
+            label = 'main'
+        else:
+            label = 'dev'
+        if options and options[0] == '--docker-label':
+            docker_label = options[1]
+        else:
+            docker_label = 'main'
+        repo_name = os.path.basename(repo.working_dir)
+        module_name = os.path.splitext(os.path.basename(flow_filename))[0]
+        module = importlib.import_module(module_name)
+        flow_function = getattr(module, flow_function_name)
+
+        docker = DockerContainer(
+            image=f'{DOCKER_REGISTRY}/{repo_name}:{docker_label}',
+            image_pull_policy='ALWAYS',
+            auto_remove=False)
+        file_system = RemoteFileSystem.load('flow_storage')
+        deployment = Deployment.build_from_flow(
+            flow=flow_function,
+            name=f'{module_name}_{label}',
+            tags=[label],
+            work_queue_name=label,
+            infrastructure=docker,
+            storage=file_system,
+            apply=True)
     else:
-        if argv:
-            for entry in argv:
-                name, value = entry.split('=')
-                kwargs[name] = value
-        flow.run(**kwargs)
+        raise ValueError(f'Command {command} is not implemented')
 
-def get_github_storage(flow_filename):
-    """Returns a GitHub storage object based on the current Git branch"""
 
-    repo = git.Repo()
-    return storage.GitHub(repo=f'UCBoulder/{os.path.basename(repo.working_dir)}',
-                          ref=repo.active_branch.name,
-                          path=f'flows/{flow_filename}',
-                          access_token_secret='GITHUB_ACCESS_TOKEN')
 
-def get_docker_run(image):
-    """Returns a DockerRun object pointing to the given registry image with either a "main" or
-    "dev" label applied depending on whether the active Git branch is "main" or not."""
 
-    repo = git.Repo()
-    if repo.active_branch.name == "main":
-        return DockerRun(image=image, labels=['main'])
-    return DockerRun(image=image, labels=['dev'])
+
+
 
 def get_config_value(key: str):
     """Retrieves the value associated with the given key in the KV Store; but this can be
