@@ -15,6 +15,7 @@ from prefect.filesystems import RemoteFileSystem
 from prefect.blocks.system import JSON
 from prefect.blocks.system import Secret
 from prefect.infrastructure.docker import DockerContainer
+from prefect_aws import MinIOCredentials
 import git
 
 DOCKER_REGISTRY = 'oit-data-services-docker-local.artifactory.colorado.edu/'
@@ -102,14 +103,14 @@ def run_flow_command_line_interface(flow_filename, flow_function_name, args=None
             image=f'{DOCKER_REGISTRY}/{repo_name}:{docker_label}',
             image_pull_policy='ALWAYS',
             auto_remove=True)
-        file_system = RemoteFileSystem.load('flow-storage')
+        storage = MinIOCredentials.load('flow-storage')
         Deployment.build_from_flow(
             flow=flow_function,
             name=f'{module_name}_{label}',
             tags=[label],
             work_queue_name=label,
             infrastructure=docker,
-            storage=file_system,
+            storage=storage,
             apply=True)
     else:
         raise ValueError(f'Command {command} is not implemented')
