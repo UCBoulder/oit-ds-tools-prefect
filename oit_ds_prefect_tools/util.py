@@ -4,15 +4,12 @@ import importlib
 import os
 import sys
 import smtplib
-import traceback
 import email
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
-from datetime import datetime
 
-import prefect
-from prefect import task
+from prefect import task, get_run_logger, context
 from prefect.deployments import Deployment
 from prefect.filesystems import RemoteFileSystem
 from prefect.blocks.system import JSON
@@ -59,7 +56,7 @@ def send_email(addressed_to: str,
         if attachments:
             info += ' with attachments ' + ', '.join([i[1] for i in attachments])
         info += f":\n{body[:500]} ..."
-        prefect.context.get('logger').info(info)
+        get_run_logger().info(info)
         mailserver.sendmail(smtp_info['from'].split(", "),
                             addressed_to.split(", "),
                             msg.as_string())
@@ -71,7 +68,7 @@ def send_email(addressed_to: str,
         if attachments:
             info += ' with attachments ' + ', '.join([i[1] for i in attachments])
         info += f":\n{body[:500]} ..."
-        prefect.context.get('logger').warn(info)
+        get_run_logger().warn(info)
 
 def run_flow_command_line_interface(flow_filename, flow_function_name, args=None):
     """Provides a command line interface for running and deploying a flow. If args is none, will
@@ -106,7 +103,7 @@ def run_flow_command_line_interface(flow_filename, flow_function_name, args=None
             image_pull_policy='ALWAYS',
             auto_remove=True)
         file_system = RemoteFileSystem.load('flow-storage')
-        deployment = Deployment.build_from_flow(
+        Deployment.build_from_flow(
             flow=flow_function,
             name=f'{module_name}_{label}',
             tags=[label],
@@ -116,10 +113,6 @@ def run_flow_command_line_interface(flow_filename, flow_function_name, args=None
             apply=True)
     else:
         raise ValueError(f'Command {command} is not implemented')
-
-
-
-
 
 def reveal_secrets(json_obj) -> dict:
     """Looks for strings within a JSON-like object that start with '<secret>' and replaces these
@@ -132,52 +125,12 @@ def reveal_secrets(json_obj) -> dict:
         if isinstance(obj, list):
             return [recursive_reveal(i) for i in obj]
         if isinstance(obj, str) and obj.startswith('<secret>'):
-            prefect.context.get('logger').info(
+            get_run_logger().info(
                 f'Extracting value for {obj[8:]} from Prefect Secrets')
             return Secret.load(obj[8:]).value
         return obj
 
     return recursive_reveal(json_obj)
-
-def record_pull(source_type, source_name, num_bytes):
-    """Makes a record in Prefect Cloud that data was pulled from a source system within a Flow
-    context. Be sure to call this function if you ever write your own extraction task outside this
-    package. Does nothing if the flow's "env" param is not "prod"."""
-
-    _make_record('pull', str(source_type), str(source_name), int(num_bytes))
-
-def record_push(sink_type, sink_name, num_bytes):
-    """Makes a record in Prefect Cloud that data was pushed to a sink system within a Flow
-    context. Be sure to call this function if you ever write your own extraction task outside this
-    package. Does nothing if the flow's "env" param is not "prod"."""
-
-    _make_record('push', str(sink_type), str(sink_name), int(num_bytes))
-
-def _make_record(record_type, source_type, source_name, num_bytes):
-    # pylint:disable=broad-except
-    if prefect.context.get('parameters')['env'] == 'prod':
-        try:
-            # Convert the BoxList to a native list to avoid JSON dump issues
-            records = list(JSON.load('pull-push-records').value)
-        except ValueError:
-            records = JSON(value=[])
-        # Combine identical records within the same hour
-        time = datetime.utcnow().strftime("%Y-%m-%dT%H:00:00")
-        base_record = [record_type, prefect.context.get('flow_name'), source_type, source_name,
-                       time]
-        try:
-            existing_record = next(i for i in records if i[:5] == base_record)
-            existing_record[5] += num_bytes
-        except StopIteration:
-            records.append(base_record + [num_bytes])
-        try:
-            JSON(value=records).save('pull-push-records')
-        except ValueError:
-            # Not connection to cloud; just do nothing
-            pass
-        except Exception:
-            prefect.context.get('logger').warn(
-                f'Exception while recording sink data {record_type}:\n{traceback.format_exc()}')
 
 def sizeof_fmt(num):
     """Takes a number of bytes and returns a human-readable representation"""
