@@ -13,11 +13,11 @@ from datetime import datetime
 
 import prefect
 from prefect import task
-from prefect.client import Secret
-from prefect.backend import kv_store
-from prefect.exceptions import ClientError
 from prefect.deployments import Deployment
 from prefect.filesystems import RemoteFileSystem
+from prefect.blocks.system import JSON
+from prefect.blocks.system import Secret
+from prefect.infrastructure.docker import DockerContainer
 import git
 
 DOCKER_REGISTRY = 'oit-data-services-docker-local.artifactory.colorado.edu/'
@@ -95,12 +95,17 @@ def run_flow_command_line_interface(flow_filename, flow_function_name, args=None
         module_name = os.path.splitext(os.path.basename(flow_filename))[0]
         module = importlib.import_module(module_name)
         flow_function = getattr(module, flow_function_name)
+        if label == 'main':
+            flow_function = flow_function.with_options(
+                timeout_seconds=12*60*60,
+                retries=2,
+                retry_delay_seconds=60)
 
         docker = DockerContainer(
             image=f'{DOCKER_REGISTRY}/{repo_name}:{docker_label}',
             image_pull_policy='ALWAYS',
-            auto_remove=False)
-        file_system = RemoteFileSystem.load('flow_storage')
+            auto_remove=True)
+        file_system = RemoteFileSystem.load('flow-storage')
         deployment = Deployment.build_from_flow(
             flow=flow_function,
             name=f'{module_name}_{label}',
@@ -116,22 +121,7 @@ def run_flow_command_line_interface(flow_filename, flow_function_name, args=None
 
 
 
-
-
-def get_config_value(key: str):
-    """Retrieves the value associated with the given key in the KV Store; but this can be
-    overridden by the Flow's runtime context."""
-
-    try:
-        value = prefect.context[key]
-        prefect.context.get('logger').info(f'Extracted value for "{key}" from Flow Context')
-        return value
-    except KeyError:
-        prefect.context.get('logger').info(
-            f'Extracting value for "{key}" from KV Store since it is not set in Flow Context')
-        return kv_store.get_key_value(key)
-
-def reveal_secrets(config) -> dict:
+def reveal_secrets(json_obj) -> dict:
     """Looks for strings within a JSON-like object that start with '<secret>' and replaces these
     with Prefect Secrets. For example, the value '<secret>EDB_PW' would be replaced with the EDB_PW
     Prefect Secret value."""
@@ -144,10 +134,10 @@ def reveal_secrets(config) -> dict:
         if isinstance(obj, str) and obj.startswith('<secret>'):
             prefect.context.get('logger').info(
                 f'Extracting value for {obj[8:]} from Prefect Secrets')
-            return Secret(obj[8:]).get()
+            return Secret.load(obj[8:]).value
         return obj
 
-    return recursive_reveal(config)
+    return recursive_reveal(json_obj)
 
 def record_pull(source_type, source_name, num_bytes):
     """Makes a record in Prefect Cloud that data was pulled from a source system within a Flow
@@ -168,12 +158,9 @@ def _make_record(record_type, source_type, source_name, num_bytes):
     if prefect.context.get('parameters')['env'] == 'prod':
         try:
             # Convert the BoxList to a native list to avoid JSON dump issues
-            records = kv_store.get_key_value('pull_push_records').to_list()
+            records = list(JSON.load('pull-push-records').value)
         except ValueError:
-            records = []
-        except ClientError:
-            # Not connected to Cloud: just do nothing
-            return
+            records = JSON(value=[])
         # Combine identical records within the same hour
         time = datetime.utcnow().strftime("%Y-%m-%dT%H:00:00")
         base_record = [record_type, prefect.context.get('flow_name'), source_type, source_name,
@@ -184,7 +171,10 @@ def _make_record(record_type, source_type, source_name, num_bytes):
         except StopIteration:
             records.append(base_record + [num_bytes])
         try:
-            kv_store.set_key_value('pull_push_records', records)
+            JSON(value=records).save('pull-push-records')
+        except ValueError:
+            # Not connection to cloud; just do nothing
+            pass
         except Exception:
             prefect.context.get('logger').warn(
                 f'Exception while recording sink data {record_type}:\n{traceback.format_exc()}')
