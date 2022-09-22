@@ -18,6 +18,7 @@ from prefect.infrastructure.docker import DockerContainer
 import git
 
 DOCKER_REGISTRY = 'oit-data-services-docker-local.artifactory.colorado.edu/'
+FLOW_STORAGE_FOLDER = 'flows'
 
 @task
 def send_email(addressed_to: str,
@@ -75,21 +76,30 @@ def run_flow_command_line_interface(flow_filename, flow_function_name, args=None
     use sys.argv"""
     # pylint:disable=too-many-locals
 
-    repo = git.Repo()
     if args is None:
         args = sys.argv[1:]
     command = args[0]
     options = args[1:]
     if command == 'deploy':
-        if options and options[0] == '--docker-label':
-            docker_label = options[1]
-        else:
-            docker_label = 'main'
+        _deploy(flow_filename, flow_function_name, options)
+    else:
+        raise ValueError(f'Command {command} is not implemented')
 
-        if os.path.basename(flow_filename) != flow_filename or not os.path.exists(flow_filename):
-            raise RuntimeError(
-                'You must use the "deploy" command from the same directory as the flow file '
-                'being deployed')
+def _deploy(flow_filename, flow_function_name, options):
+    if options and options[0] == '--docker-label':
+        docker_label = options[1]
+    else:
+        docker_label = 'main'
+
+    repo = git.Repo()
+    cwd = os.getcwd()
+    os.chdir(FLOW_STORAGE_FOLDER)
+
+    try:
+        flow_filename = os.path.basename(flow_filename)
+        if not os.path.exists(flow_filename):
+            raise FileNotFoundError(
+                f'File {flow_filename} not found in the {FLOW_STORAGE_FOLDER} folder')
         if set_default_ignore_file('.'):
             print('Created default .prefectignore file')
 
@@ -127,8 +137,13 @@ def run_flow_command_line_interface(flow_filename, flow_function_name, args=None
             infrastructure=docker,
             storage=storage,
             apply=True)
-    else:
-        raise ValueError(f'Command {command} is not implemented')
+
+    finally:
+        try:
+            os.chdir(cwd)
+        # pylint:disable=broad-except
+        except Exception:
+            pass
 
 def reveal_secrets(json_obj) -> dict:
     """Looks for strings within a JSON-like object that start with '<secret>' and replaces these
