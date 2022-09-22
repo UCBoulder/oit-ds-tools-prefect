@@ -12,10 +12,8 @@ from email.mime.base import MIMEBase
 from prefect import task, get_run_logger, context
 from prefect.deployments import Deployment
 from prefect.filesystems import RemoteFileSystem
-from prefect.blocks.system import JSON
 from prefect.blocks.system import Secret
 from prefect.infrastructure.docker import DockerContainer
-from prefect_aws import MinIOCredentials
 import git
 
 DOCKER_REGISTRY = 'oit-data-services-docker-local.artifactory.colorado.edu/'
@@ -55,25 +53,26 @@ def send_email(addressed_to: str,
     if addressed_to:
         info = f'Sending "{subject}" email to {addressed_to}'
         if attachments:
-            info += ' with attachments ' + ', '.join([i[1] for i in attachments])
+            info += ' with attachments ' + ', '.join(
+                [f'{i[1]} ({sizeof_fmt(len(i[0]))})' for i in attachments])
         info += f":\n{body[:500]} ..."
         get_run_logger().info(info)
         mailserver.sendmail(smtp_info['from'].split(", "),
                             addressed_to.split(", "),
                             msg.as_string())
         mailserver.quit()
-        if attachments:
-            record_push('smtp', smtp_info['host'], sum(len(i[0]) for i in attachments))
     else:
         info = f'No delivery contacts set; "{subject}" email not sent'
         if attachments:
-            info += ' with attachments ' + ', '.join([i[1] for i in attachments])
+            info += ' with attachments ' + ', '.join(
+                [f'{i[1]} ({sizeof_fmt(len(i[0]))})' for i in attachments])
         info += f":\n{body[:500]} ..."
         get_run_logger().warn(info)
 
 def run_flow_command_line_interface(flow_filename, flow_function_name, args=None):
     """Provides a command line interface for running and deploying a flow. If args is none, will
     use sys.argv"""
+    # pylint:disable=too-many-locals
 
     repo = git.Repo()
     if args is None:
@@ -81,10 +80,6 @@ def run_flow_command_line_interface(flow_filename, flow_function_name, args=None
     command = args[0]
     options = args[1:]
     if command == 'deploy':
-        if repo.active_branch.name == "main":
-            label = 'main'
-        else:
-            label = 'dev'
         if options and options[0] == '--docker-label':
             docker_label = options[1]
         else:
@@ -93,20 +88,31 @@ def run_flow_command_line_interface(flow_filename, flow_function_name, args=None
         module_name = os.path.splitext(os.path.basename(flow_filename))[0]
         module = importlib.import_module(module_name)
         flow_function = getattr(module, flow_function_name)
-        if label == 'main':
+        branch_name = repo.active_branch.name
+        if branch_name == "main":
+            label = 'main'
+            storage_path = f'main/{repo_name}'
             flow_function = flow_function.with_options(
                 timeout_seconds=12*60*60,
                 retries=2,
                 retry_delay_seconds=60)
+        else:
+            label = 'dev'
+            storage_path = f'dev/{repo_name}/{branch_name}'
 
         docker = DockerContainer(
             image=f'{DOCKER_REGISTRY}/{repo_name}:{docker_label}',
             image_pull_policy='ALWAYS',
             auto_remove=True)
-        storage = MinIOCredentials.load('flow-storage')
+
+        storage = RemoteFileSystem.load('flow-storage')
+        if not storage.basepath.endswith('/'):
+            storage.basepath += '/'
+        storage.basepath = storage.basepath + storage_path
+
         Deployment.build_from_flow(
             flow=flow_function,
-            name=f'{module_name}_{label}',
+            name=f'{module_name}-{label}-{branch_name}',
             tags=[label],
             work_queue_name=label,
             infrastructure=docker,
