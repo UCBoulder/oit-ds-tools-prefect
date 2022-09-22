@@ -10,6 +10,7 @@ from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
 
 from prefect import task, get_run_logger, context
+from prefect.utilities.filesystem import set_default_ignore_file
 from prefect.deployments import Deployment
 from prefect.filesystems import RemoteFileSystem
 from prefect.blocks.system import Secret
@@ -84,8 +85,16 @@ def run_flow_command_line_interface(flow_filename, flow_function_name, args=None
             docker_label = options[1]
         else:
             docker_label = 'main'
+
+        if os.path.basename(flow_filename) != flow_filename or not os.path.exists(flow_filename):
+            raise RuntimeError(
+                'You must use the "deploy" command from the same directory as the flow file '
+                'being deployed')
+        if set_default_ignore_file('.'):
+            print('Created default .prefectignore file')
+
         repo_name = os.path.basename(repo.working_dir)
-        module_name = os.path.splitext(os.path.basename(flow_filename))[0]
+        module_name = os.path.splitext(flow_filename)[0]
         module = importlib.import_module(module_name)
         flow_function = getattr(module, flow_function_name)
         branch_name = repo.active_branch.name
