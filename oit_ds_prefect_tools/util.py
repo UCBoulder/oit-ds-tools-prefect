@@ -116,9 +116,8 @@ def _deploy(flow_filename, flow_function_name, options):
             label = 'main'
             storage_path = f'main/{repo_name}'
             flow_function = flow_function.with_options(
-                timeout_seconds=12*60*60,
-                retries=2,
-                retry_delay_seconds=60)
+                retries=1,
+                retry_delay_seconds=5*60)
         else:
             label = 'dev'
             storage_path = f'dev/{repo_name}/{branch_name}'
