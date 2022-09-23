@@ -182,8 +182,10 @@ def _load_known_hosts(ssh_client, connection_info):
     if 'known_hosts' in connection_info:
         hosts_filename = os.path.expanduser(f'~/.ssh/prefect_known_hosts_{uuid.uuid4()}')
         known_hosts = JSON.load(connection_info['known_hosts']).value
-        if not os.path.exists(os.path.expanduser('~/.ssh/')):
+        try:
             os.mkdir(os.path.expanduser('~/.ssh/'))
+        except FileExistsError:
+            pass
         with open(hosts_filename, 'w', encoding="ascii") as fileobj:
             fileobj.write('\n'.join(known_hosts))
         ssh_client.load_host_keys(hosts_filename)

@@ -90,6 +90,8 @@ def run_flow_command_line_interface(flow_filename, flow_function_name, args=None
         raise ValueError(f'Command {command} is not implemented')
 
 def _deploy(flow_filename, flow_function_name, options):
+    # pylint:disable=too-many-locals
+    # pylint:disable=too-many-branches
     if options and options[0] == '--docker-label':
         docker_label = options[1]
     else:
@@ -109,8 +111,11 @@ def _deploy(flow_filename, flow_function_name, options):
 
         repo_name = os.path.basename(repo.working_dir)
         module_name = os.path.splitext(flow_filename)[0]
-        module = importlib.import_module(module_name)
-        flow_function = getattr(module, flow_function_name)
+        try:
+            flow_function = getattr(sys.modules['__main__'], flow_function_name)
+        except KeyError:
+            module = importlib.import_module(module_name)
+            flow_function = getattr(module, flow_function_name)
         branch_name = repo.active_branch.name
         if branch_name == "main":
             label = 'main'
@@ -143,7 +148,7 @@ def _deploy(flow_filename, flow_function_name, options):
             raise ValueError(
                 f'Flow storage connection system type {storage_conn["system_type"]} not supported')
 
-        Deployment.build_from_flow(
+        deployment = Deployment.build_from_flow(
             flow=flow_function,
             name=f'{module_name}-{label}-{branch_name}',
             tags=[label],
@@ -151,6 +156,7 @@ def _deploy(flow_filename, flow_function_name, options):
             infrastructure=docker,
             storage=storage,
             apply=True)
+        print(f'Deployed {deployment.name}')
 
     finally:
         try:
@@ -181,7 +187,7 @@ def reveal_secrets(json_obj) -> dict:
 
     return recursive_reveal(json_obj)
 
-def now() -> datetime.datetime:
+def now() -> datetime:
     """Returns the current datetime converted to `util.TIMEZONE`"""
 
     return datetime.now(pytz.timezone(TIMEZONE))
