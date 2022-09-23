@@ -1,6 +1,7 @@
 """General utility functions to make flows easier to implement with Prefect Cloud"""
 
 import importlib
+from datetime import datetime
 import os
 import sys
 import smtplib
@@ -16,10 +17,12 @@ from prefect.filesystems import RemoteFileSystem
 from prefect.blocks.system import Secret, JSON
 from prefect.infrastructure.docker import DockerContainer
 import git
+import pytz
 
 DOCKER_REGISTRY = 'oit-data-services-docker-local.artifactory.colorado.edu'
 LOCAL_FLOW_FOLDER = 'flows'
 FLOW_STORAGE_CONNECTION_BLOCK = 'ds-flow-storage'
+TIMEZONE = 'America/Denver'
 
 @task
 def send_email(addressed_to: str,
@@ -179,7 +182,12 @@ def reveal_secrets(json_obj) -> dict:
 
     return recursive_reveal(json_obj)
 
-def sizeof_fmt(num):
+def now() -> datetime.datetime:
+    """Returns the current datetime converted to `util.TIMEZONE`"""
+
+    return datetime.now(pytz.timezone(TIMEZONE))
+
+def sizeof_fmt(num: int) -> str:
     """Takes a number of bytes and returns a human-readable representation"""
 
     for unit in ["B", "KB", "MB", "GB", "TB"]:
