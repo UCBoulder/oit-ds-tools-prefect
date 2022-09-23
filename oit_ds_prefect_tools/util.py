@@ -13,12 +13,13 @@ from prefect import task, get_run_logger, context
 from prefect.utilities.filesystem import set_default_ignore_file
 from prefect.deployments import Deployment
 from prefect.filesystems import RemoteFileSystem
-from prefect.blocks.system import Secret
+from prefect.blocks.system import Secret, JSON
 from prefect.infrastructure.docker import DockerContainer
 import git
 
 DOCKER_REGISTRY = 'oit-data-services-docker-local.artifactory.colorado.edu'
-FLOW_STORAGE_FOLDER = 'flows'
+LOCAL_FLOW_FOLDER = 'flows'
+FLOW_STORAGE_CONNECTION_BLOCK = 'ds-flow-storage'
 
 @task
 def send_email(addressed_to: str,
@@ -93,13 +94,13 @@ def _deploy(flow_filename, flow_function_name, options):
 
     repo = git.Repo()
     cwd = os.getcwd()
-    os.chdir(FLOW_STORAGE_FOLDER)
+    os.chdir(LOCAL_FLOW_FOLDER)
 
     try:
         flow_filename = os.path.basename(flow_filename)
         if not os.path.exists(flow_filename):
             raise FileNotFoundError(
-                f'File {flow_filename} not found in the {FLOW_STORAGE_FOLDER} folder')
+                f'File {flow_filename} not found in the {LOCAL_FLOW_FOLDER} folder')
         if set_default_ignore_file('.'):
             print('Created default .prefectignore file')
 
@@ -124,10 +125,21 @@ def _deploy(flow_filename, flow_function_name, options):
             image_pull_policy='ALWAYS',
             auto_remove=True)
 
-        storage = RemoteFileSystem.load('flow-storage')
-        if not storage.basepath.endswith('/'):
-            storage.basepath += '/'
-        storage.basepath = storage.basepath + storage_path
+        storage_conn = reveal_secrets(JSON.load(FLOW_STORAGE_CONNECTION_BLOCK).value)
+        if storage_conn['system_type'] == 'minio':
+            endpoint_url = storage_conn['endpoint']
+            if not endpoint_url.startswith('https://'):
+                endpoint_url = 'https://' + endpoint_url
+            storage = RemoteFileSystem(
+                basepath=f's3://{storage_conn["bucket"]}/{storage_path}',
+                settings={
+                    'key': storage_conn['access_key'],
+                    'secret': storage_conn['secret_key'],
+                    'client_kwargs': { 'endpoint_url':endpoint_url }
+                })
+        else:
+            raise ValueError(
+                f'Flow storage connection system type {storage_conn["system_type"]} not supported')
 
         Deployment.build_from_flow(
             flow=flow_function,
@@ -156,9 +168,13 @@ def reveal_secrets(json_obj) -> dict:
         if isinstance(obj, list):
             return [recursive_reveal(i) for i in obj]
         if isinstance(obj, str) and obj.startswith('<secret>'):
-            get_run_logger().info(
-                f'Extracting value for {obj[8:]} from Prefect Secrets')
-            return Secret.load(obj[8:]).value
+            try:
+                get_run_logger().info(
+                    f'Extracting value for {obj[8:]} from Secret Block')
+            except RuntimeError:
+                # Called outside flow run: print instead
+                print(f'Extracting value for {obj[8:]} from Secret Block')
+            return Secret.load(obj[8:]).get()
         return obj
 
     return recursive_reveal(json_obj)
