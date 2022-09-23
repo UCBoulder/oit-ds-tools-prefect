@@ -181,7 +181,7 @@ def _make_ssh_key(connection_info):
 def _load_known_hosts(ssh_client, connection_info):
     if 'known_hosts' in connection_info:
         hosts_filename = os.path.expanduser(f'~/.ssh/prefect_known_hosts_{uuid.uuid4()}')
-        known_hosts = JSON.load(connection_info['known_hosts'])
+        known_hosts = JSON.load(connection_info['known_hosts']).value
         if not os.path.exists(os.path.expanduser('~/.ssh/')):
             os.mkdir(os.path.expanduser('~/.ssh/'))
         with open(hosts_filename, 'w', encoding="ascii") as fileobj:
