@@ -17,7 +17,7 @@ from prefect.blocks.system import Secret
 from prefect.infrastructure.docker import DockerContainer
 import git
 
-DOCKER_REGISTRY = 'oit-data-services-docker-local.artifactory.colorado.edu/'
+DOCKER_REGISTRY = 'oit-data-services-docker-local.artifactory.colorado.edu'
 FLOW_STORAGE_FOLDER = 'flows'
 
 @task
