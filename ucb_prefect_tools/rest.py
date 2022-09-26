@@ -18,12 +18,10 @@ from typing import Callable
 from json.decoder import JSONDecodeError
 from multiprocessing.pool import ThreadPool
 
-import prefect
-from prefect import task
+from prefect import task, get_run_logger
 import requests
 import pandas as pd
 
-from . import util
 from .util import sizeof_fmt
 
 @task(name='rest.get')
@@ -79,7 +77,8 @@ def delete(endpoint: str, connection_info: dict, params=None, data=None, json=No
     for more details."""
     # pylint:disable=too-many-arguments
 
-    return _send_modify_request(requests.delete, endpoint, connection_info, params, data, json, files)
+    return _send_modify_request(requests.delete, endpoint, connection_info, params, data, json,
+        files)
 
 @task(name='rest.get_many')
 def get_many(endpoints: list[str],
@@ -102,8 +101,9 @@ def get_many(endpoints: list[str],
     cleaner logs (Prefect Cloud only supports up to 10,000 log entries per flow).
     """
     # pylint:disable=too-many-arguments
+    # pylint:disable=too-many-locals
 
-    prefect.context.get('logger').info(
+    get_run_logger().info(
         f'REST: Sending {len(endpoints)} GET requests to {connection_info["domain"]} ...')
     if params_list is None:
         params_list = [None] * len(endpoints)
@@ -137,7 +137,7 @@ def get_many(endpoints: list[str],
                     results.append(next(results_iter))
                     count += 1
                     if count % 1000 == 0:
-                        prefect.context.get('logger').info(
+                        get_run_logger().info(
                             f'Received {count} results out of {len(endpoints)} so far...')
                 except StopIteration:
                     break
@@ -145,18 +145,15 @@ def get_many(endpoints: list[str],
     # filter and return results
     filled_results = [i for i in results if not i is None]
     ignored = len(results) - len(filled_results)
-    prefect.context.get('logger').info(
-        f'REST: Received {len(filled_results)} responses, with {ignored} ignored')
+    total_size = sizeof_fmt(sum([size for response, size in filled_results]))
+    get_run_logger().info(
+        f'REST: Received {len(filled_results)} responses ({total_size}), with {ignored} ignored')
     failures = [i for i in filled_results if isinstance(i, BaseException)]
     if failures:
-        prefect.context.get('logger').error(
+        get_run_logger().error(
             f'REST: Encountered {len(failures)} exceptions while sending requests. Only the first '
             'will be raised.')
         raise failures[0]
-    util.record_pull(
-        'rest',
-        connection_info['domain'],
-        sum([size for response, size in filled_results]))
     return [response for response, size in filled_results]
 
 @task(name='rest.post_many')
@@ -275,7 +272,7 @@ def _get(endpoint, connection_info, params, next_page_getter, to_dataframe, code
     domain = info.pop('domain')
     url = domain + endpoint
     if log:
-        prefect.context.get('logger').info(f'REST: Sending GET to {url} ...')
+        get_run_logger().info(f'REST: Sending GET to {url} ...')
     auth = info.pop('auth', None)
     kwargs = {'headers': info}
     if auth:
@@ -316,8 +313,7 @@ def _get(endpoint, connection_info, params, next_page_getter, to_dataframe, code
                 f'Param next_page_getter must return a str or dict, not {type(next_page_info)}')
 
     if log:
-        prefect.context.get('logger').info(f'REST: Received {len(data)} objects')
-        util.record_pull('rest', domain, size)
+        get_run_logger().info(f'REST: Received {len(data)} objects ({sizeof_fmt(size)} total)')
         if to_dataframe:
             return pd.DataFrame(data)
         return data
@@ -331,11 +327,12 @@ def _get_mappable(kwargs):
 
 def _send_modify_request(method, endpoint, connection_info, params, data, json, files, log=True):
     # pylint:disable=too-many-arguments
+    # pylint:disable=too-many-branches
     info = connection_info.copy()
     domain = info.pop('domain')
     url = domain + endpoint
     if log:
-        prefect.context.get('logger').info(f'REST: Sending {method.__name__.upper()} to {url} ...')
+        get_run_logger().info(f'REST: Sending {method.__name__.upper()} to {url} ...')
     auth = info.pop('auth', None)
     kwargs = {'headers': info}
     if auth:
@@ -358,8 +355,7 @@ def _send_modify_request(method, endpoint, connection_info, params, data, json, 
     else:
         size = 0
     if log:
-        prefect.context.get('logger').info(f'REST: Sent {sizeof_fmt(size)} bytes')
-        util.record_push('rest', domain, size)
+        get_run_logger().info(f'REST: Sent {sizeof_fmt(size)} bytes')
         try:
             return response.json()
         except JSONDecodeError:
@@ -381,9 +377,10 @@ def _send_modify_requests(
         num_workers):
     # pylint:disable=too-many-arguments
     # pylint:disable=too-many-branches
+    # pylint:disable=too-many-locals
 
     method_name = method.__name__.upper()
-    prefect.context.get('logger').info(
+    get_run_logger().info(
         f'REST: Sending {len(endpoints)} {method_name} requests to {connection_info["domain"]} ...')
     if params_list is None:
         params_list = [None] * len(endpoints)
@@ -440,23 +437,21 @@ def _send_modify_requests(
                     results.append(next(results_iter))
                     count += 1
                     if count % 1000 == 0:
-                        prefect.context.get('logger').info(
+                        get_run_logger().info(
                             f'Received {count} results out of {len(endpoints)} so far...')
                 except StopIteration:
                     break
 
     # return results
-    prefect.context.get('logger').info(f'REST: Received {len(results)} responses')
+    total_size = sum([size for response, size in results])
+    get_run_logger().info(
+        f'REST: Received {len(results)} responses ({sizeof_fmt(total_size)} total)')
     failures = [i for i in results if isinstance(i, BaseException)]
     if failures:
-        prefect.context.get('logger').error(
+        get_run_logger().error(
             f'REST: Encountered {len(failures)} exceptions while sending requests. Only the first '
             'will be raised.')
         raise failures[0]
-    util.record_push(
-        'rest',
-        connection_info['domain'],
-        sum([size for response, size in results]))
     return [response for response, size in results]
 
 def _send_mappable(kwargs):

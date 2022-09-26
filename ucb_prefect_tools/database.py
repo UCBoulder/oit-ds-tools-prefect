@@ -14,9 +14,7 @@ the constructor indicated in the list above, with some exceptions:
 
 import cx_Oracle
 import psycopg2
-import prefect
-from prefect import task
-from prefect.engine import signals
+from prefect import task, get_run_logger
 import pandas as pd
 
 from . import util
@@ -160,7 +158,7 @@ def _log_oracle_error(error, sql_query):
         line_no = len(sql_query[:offset].split('\n'))
         line = sql_query[:offset].split('\n')[-1] + '█' + sql_query[offset:].split('\n')[0]
         message = f'Line {line_no}: {line[:100]}'
-        prefect.context.get('logger').error(
+        get_run_logger().error(
             f'Oracle: Database error - {error}\n{message}')
 
 def _make_oracle_dsn(connection_info):
@@ -208,7 +206,7 @@ def oracle_sql_extract(sql_query: str,
         log_str = f"Oracle: Reading from {host}: {sql_snip}"
         if query_params:
             log_str += f'\nwith injected params: {query_params}'
-        prefect.context.get('logger').info(log_str)
+        get_run_logger().info(log_str)
 
         cursor = conn.cursor()
         cursor.arraysize = chunksize
@@ -240,13 +238,12 @@ def oracle_sql_extract(sql_query: str,
                 data = pd.DataFrame(rows, columns=columns)
                 count = len(data.index)
                 for column in lob_columns:
-                    prefect.context.get('logger').info(
+                    get_run_logger().info(
                         f'Reading data from LOB column {column}')
                     data[column] = data[column].map(lambda x: x.read() if x else None)
                 size = sum(data.memory_usage())
 
-            util.record_pull('oracle', host, size)
-            prefect.context.get('logger').info(f'Oracle: Read {count} rows')
+            get_run_logger().info(f'Oracle: Read {count} rows, {util.sizeof_fmt(size)}')
             if chunks_prefix:
                 return filenames
             return data
@@ -286,7 +283,7 @@ def oracle_insert(
 
         _oracle_execute_statements(conn, cursor, host, pre_insert_statements, pre_insert_params)
 
-        prefect.context.get('logger').info(
+        get_run_logger().info(
             f"Oracle: Inserting into {table_identifier} on {host}")
         # Insert records in batches
         for start in range(0, len(records), batch_size):
@@ -294,14 +291,14 @@ def oracle_insert(
             cursor.executemany(insert_sql, to_insert, batcherrors=True)
             batch_errors = cursor.getbatcherrors()
             for error in batch_errors[:10 - errors]:
-                prefect.context.get('logger').error(
+                get_run_logger().error(
                     f'Oracle: Database error {error.message} while inserting data '
                     f'{to_insert[error.offset]}')
             errors += len(batch_errors)
         if records:
             error_proportion = float(errors) / float(len(records))
             if error_proportion > max_error_proportion:
-                prefect.context.get('logger').error(
+                get_run_logger().error(
                     f'{error_proportion:.0%} of insert actions failed, exceeding the set maximum '
                     f'({max_error_proportion:.0%}); rolling back transaction.')
                 conn.rollback()
@@ -310,13 +307,13 @@ def oracle_insert(
 
     # Logging
     if errors > 10:
-        prefect.context.get('logger').error(
+        get_run_logger().error(
             f'Oracle: {errors - 10} more database errors while inserting not shown')
-    prefect.context.get('logger').info(
-        f"Oracle: Inserted {len(records) - errors} rows")
-    util.record_push('oracle', host, sum(dataframe.memory_usage()))
+    get_run_logger().info(
+        f"Oracle: Inserted {len(records) - errors} rows, "
+        f"{util.sizeof_fmt(sum(dataframe.memory_usage()))}")
     if errors:
-        raise signals.FAIL(f'Failed to insert {errors} records')
+        raise RuntimeError(f'Failed to insert {errors} records')
 
 def oracle_update(
         dataframe: pd.DataFrame,
@@ -337,7 +334,7 @@ def oracle_update(
     match_list = [f'{i} = :{i}' for i in match_on]
     update_sql = (f'UPDATE {table_identifier} SET {", ".join(set_list)} ' +
                   f'WHERE {" AND ".join(match_list)}')
-    prefect.context.get('logger').info(update_sql)
+    get_run_logger().info(update_sql)
     _make_oracle_dsn(connection_info)
     if 'encoding' not in connection_info:
         connection_info['encoding'] = 'UTF-8'
@@ -354,7 +351,7 @@ def oracle_update(
 
         _oracle_execute_statements(conn, cursor, host, pre_update_statements, pre_update_params)
 
-        prefect.context.get('logger').info(
+        get_run_logger().info(
             f"Oracle: Updating data in {table_identifier} on {host}")
         # Update records in batches
         for start in range(0, len(records), batch_size):
@@ -362,14 +359,14 @@ def oracle_update(
             cursor.executemany(update_sql, to_update, batcherrors=True)
             batch_errors = cursor.getbatcherrors()
             for error in batch_errors[:10 - errors]:
-                prefect.context.get('logger').error(
+                get_run_logger().error(
                     f'Oracle: Database error {error.message} while updating data '
                     f'{to_update[error.offset]}')
             errors += len(batch_errors)
         if records:
             error_proportion = float(errors) / float(len(records))
             if error_proportion > max_error_proportion:
-                prefect.context.get('logger').error(
+                get_run_logger().error(
                     f'{error_proportion:.0%} of update actions failed, exceeding the set maximum '
                     f'({max_error_proportion:.0%}); rolling back transaction.')
                 conn.rollback()
@@ -378,13 +375,13 @@ def oracle_update(
 
     # Logging
     if errors > 10:
-        prefect.context.get('logger').error(
+        get_run_logger().error(
             f'Oracle: {errors - 10} more database errors while updating not shown')
-    prefect.context.get('logger').info(
-        f"Oracle: Updated {len(records) - errors} rows")
-    util.record_push('oracle', host, sum(dataframe.memory_usage()))
+    get_run_logger().info(
+        f"Oracle: Updated {len(records) - errors} rows, "
+        f"{util.sizeof_fmt(sum(dataframe.memory_usage()))}")
     if errors:
-        raise signals.FAIL(f'Failed to update {errors} records')
+        raise RuntimeError(f'Failed to update {errors} records')
 
 def oracle_execute_sql(sql_statement, connection_info: dict, query_params=None):
     """Oracle-specific implementation of the execute_sql task"""
@@ -411,7 +408,7 @@ def _oracle_execute_statements(conn, cursor, host, statements, query_params=None
             log_str = f"Oracle: Executing on {host}: {sql_snip}"
             if params:
                 log_str += f'\nwith injected params: {params}'
-            prefect.context.get('logger').info(log_str)
+            get_run_logger().info(log_str)
             if params:
                 cursor.execute(sql, parameters=params)
             else:
@@ -447,7 +444,7 @@ def postgre_sql_extract(sql_query: str,
         log_str = f"Postgre: Reading from {host}: {sql_snip}"
         if query_params:
             log_str += f'\nwith injected params: {query_params}'
-        prefect.context.get('logger').info(log_str)
+        get_run_logger().info(log_str)
 
         cursor = conn.cursor()
         cursor.arraysize = chunksize
@@ -477,8 +474,7 @@ def postgre_sql_extract(sql_query: str,
             count = len(data.index)
             size = sum(data.memory_usage())
 
-        util.record_pull('postgre', host, size)
-        prefect.context.get('logger').info(f'Postgre: Read {count} rows')
+        get_run_logger().info(f'Postgre: Read {count} rows, {util.sizeof_fmt(size)}')
         if chunks_prefix:
             return filenames
         return data
@@ -510,7 +506,7 @@ def postgre_insert(
 
         _postgre_execute_statements(cursor, host, pre_insert_statements, pre_insert_params)
 
-        prefect.context.get('logger').info(
+        get_run_logger().info(
             f"Postgre: Inserting into {table_identifier} on {host}")
         # Insert records individually
         for to_insert in records:
@@ -519,13 +515,13 @@ def postgre_insert(
             # pylint:disable=broad-except
             except Exception as err:
                 if errors < 10:
-                    prefect.context.get('logger').error(
+                    get_run_logger().error(
                         f'Postgre: Error while inserting data {to_insert}:\n{err}')
                 errors += 1
         if records:
             error_proportion = float(errors) / float(len(records))
             if error_proportion > max_error_proportion:
-                prefect.context.get('logger').error(
+                get_run_logger().error(
                     f'{error_proportion:.0%} of insert actions failed, exceeding the set maximum '
                     f'({max_error_proportion:.0%}); rolling back transaction.')
                 conn.rollback()
@@ -534,13 +530,13 @@ def postgre_insert(
 
     # Logging
     if errors > 10:
-        prefect.context.get('logger').error(
+        get_run_logger().error(
             f'Postgre: {errors - 10} more database errors while inserting not shown')
-    prefect.context.get('logger').info(
-        f"Postgre: Inserted {len(records) - errors} rows")
-    util.record_push('postgre', host, sum(dataframe.memory_usage()))
+    get_run_logger().info(
+        f"Postgre: Inserted {len(records) - errors} rows"
+        f"{util.sizeof_fmt(sum(dataframe.memory_usage()))}")
     if errors:
-        raise signals.FAIL(f'Failed to insert {errors} records')
+        raise RuntimeError(f'Failed to insert {errors} records')
 
 def postgre_update(
         dataframe: pd.DataFrame,
@@ -560,7 +556,7 @@ def postgre_update(
     match_list = [f'{i} = :{i}' for i in match_on]
     update_sql = (f'UPDATE {table_identifier} SET {", ".join(set_list)} ' +
                   f'WHERE {" AND ".join(match_list)}')
-    prefect.context.get('logger').info(update_sql)
+    get_run_logger().info(update_sql)
     if pre_update_statements is None:
         pre_update_statements = []
 
@@ -574,7 +570,7 @@ def postgre_update(
 
         _postgre_execute_statements(cursor, host, pre_update_statements, pre_update_params)
 
-        prefect.context.get('logger').info(
+        get_run_logger().info(
             f"Postgre: Updating data in {table_identifier} on {host}")
         # Update records individually
         for to_update in records:
@@ -583,13 +579,13 @@ def postgre_update(
             # pylint:disable=broad-except
             except Exception as err:
                 if errors < 10:
-                    prefect.context.get('logger').error(
+                    get_run_logger().error(
                         f'Postgre: Error while updating data {to_update}:\n{err}')
                 errors += 1
         if records:
             error_proportion = float(errors) / float(len(records))
             if error_proportion > max_error_proportion:
-                prefect.context.get('logger').error(
+                get_run_logger().error(
                     f'{error_proportion:.0%} of update actions failed, exceeding the set maximum '
                     f'({max_error_proportion:.0%}); rolling back transaction.')
                 conn.rollback()
@@ -598,13 +594,13 @@ def postgre_update(
 
     # Logging
     if errors > 10:
-        prefect.context.get('logger').error(
+        get_run_logger().error(
             f'Postgre: {errors - 10} more database errors while updating not shown')
-    prefect.context.get('logger').info(
-        f"Postgre: Updated {len(records) - errors} rows")
-    util.record_push('postgre', host, sum(dataframe.memory_usage()))
+    get_run_logger().info(
+        f"Postgre: Updated {len(records) - errors} rows"
+        f"{util.sizeof_fmt(sum(dataframe.memory_usage()))}")
     if errors:
-        raise signals.FAIL(f'Failed to update {errors} records')
+        raise RuntimeError(f'Failed to update {errors} records')
 
 def postgre_execute_sql(sql_statement, connection_info: dict, query_params=None):
     """Postgre-specific implementation of the execute_sql task"""
@@ -619,7 +615,6 @@ def postgre_execute_sql(sql_statement, connection_info: dict, query_params=None)
         _postgre_execute_statements(cursor, host, sql_statement, query_params)
         conn.commit()
 
-
 def _postgre_execute_statements(cursor, host, statements, query_params=None):
     if query_params is None:
         query_params = [None] * len(statements)
@@ -628,7 +623,7 @@ def _postgre_execute_statements(cursor, host, statements, query_params=None):
         log_str = f"Postgre: Executing on {host}: {sql_snip}"
         if params:
             log_str += f'\nwith injected params: {params}'
-        prefect.context.get('logger').info(log_str)
+        get_run_logger().info(log_str)
         if params:
             cursor.execute(sql, parameters=params)
         else:

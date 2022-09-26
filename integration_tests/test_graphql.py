@@ -4,7 +4,7 @@ import unittest
 
 from prefect import Flow, task, Parameter, unmapped
 
-from oit_ds_prefect_tools import graphql
+from ucb_prefect_tools import graphql
 
 class QueryTests(unittest.TestCase):
     """Tests for the query task"""

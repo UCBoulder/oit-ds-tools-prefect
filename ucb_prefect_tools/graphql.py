@@ -9,11 +9,9 @@ authentication). The "content-type" header is automatically set to "application/
 from pprint import pformat
 from typing import Callable
 
-import prefect
-from prefect import task
+from prefect import task, get_run_logger
 import requests
 
-from . import util
 from .util import sizeof_fmt
 
 class GraphQLError(Exception):
@@ -65,7 +63,7 @@ def query(query_str: str,
     message = f'GraphQL: Querying {connection_info["endpoint"]}: {query_str[:200]} ...'
     if operation_name:
         message += f'\nusing operation {operation_name}'
-    prefect.context.get('logger').info(message)
+    get_run_logger().info(message)
 
     request = {'url': connection_info['endpoint']}
     request['headers'] = {k:v for k, v in connection_info.items() if k != 'endpoint'}
@@ -91,7 +89,5 @@ def query(query_str: str,
         message += ' with {len(result_data)} requests'
     else:
         result_data = result_data[0]
-    prefect.context.get('logger').info(message)
-    util.record_push('graphql', connection_info['endpoint'], total_sent)
-    util.record_pull('graphql', connection_info['endpoint'], total_received)
+    get_run_logger().info(message)
     return result_data
