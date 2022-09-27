@@ -14,6 +14,7 @@ import requests
 
 from .util import sizeof_fmt
 
+
 class GraphQLError(Exception):
     """Exception for when GraphQL response lists errors"""
 
@@ -21,28 +22,32 @@ class GraphQLError(Exception):
         super().__init__(message)
         self.errors = errors
 
+
 def _graphql_query(request):
     response = requests.post(**request)
     response.raise_for_status()
     result = response.json()
     received_size = len(response.content)
     sent_size = len(response.request.body)
-    if 'errors' in result:
-        errors = result['errors']
-        message = f'Response listed {len(errors)} errors:\n'
-        message += '\n'.join(pformat(i) for i in errors[:5])
+    if "errors" in result:
+        errors = result["errors"]
+        message = f"Response listed {len(errors)} errors:\n"
+        message += "\n".join(pformat(i) for i in errors[:5])
         if len(errors) > 5:
-            message += f'\n(Plus {len(errors) - 5} more)'
+            message += f"\n(Plus {len(errors) - 5} more)"
         message += f'\n\nRequest JSON:\n{pformat(request["json"])[:2000]}'
         raise GraphQLError(message, errors)
-    return result['data'], sent_size, received_size
+    return result["data"], sent_size, received_size
+
 
 @task(name="graphql.query")
-def query(query_str: str,
-          connection_info: dict,
-          variables: dict =None,
-          operation_name: str =None,
-          next_variables_getter: Callable =None):
+def query(
+    query_str: str,
+    connection_info: dict,
+    variables: dict = None,
+    operation_name: str = None,
+    next_variables_getter: Callable = None,
+):
     """POSTs a GraphQL query or mutation and returns the "data" entry of the response.
 
     If next_variables_getter is given, this is a function which will take the "data" entry of the
@@ -62,31 +67,33 @@ def query(query_str: str,
 
     message = f'GraphQL: Querying {connection_info["endpoint"]}: {query_str[:200]} ...'
     if operation_name:
-        message += f'\nusing operation {operation_name}'
+        message += f"\nusing operation {operation_name}"
     get_run_logger().info(message)
 
-    request = {'url': connection_info['endpoint']}
-    request['headers'] = {k:v for k, v in connection_info.items() if k != 'endpoint'}
-    request['json'] = {'query': query_str}
+    request = {"url": connection_info["endpoint"]}
+    request["headers"] = {k: v for k, v in connection_info.items() if k != "endpoint"}
+    request["json"] = {"query": query_str}
     if operation_name:
-        request['json']['operationName'] = operation_name
+        request["json"]["operationName"] = operation_name
 
     result_data = []
     total_sent = 0
     total_received = 0
     while current_vars or not result_data:
         if current_vars:
-            request['json']['variables'] = current_vars
+            request["json"]["variables"] = current_vars
         data, sent_size, received_size = _graphql_query(request)
         result_data.append(data)
         total_sent += sent_size
         total_received += received_size
         current_vars = next_vars(data)
 
-    message = (f'GraphQL: Sent {sizeof_fmt(total_sent)} and received {sizeof_fmt(total_received)}'
-               ' of data')
+    message = (
+        f"GraphQL: Sent {sizeof_fmt(total_sent)} and received {sizeof_fmt(total_received)}"
+        " of data"
+    )
     if len(result_data) > 1:
-        message += ' with {len(result_data)} requests'
+        message += " with {len(result_data)} requests"
     else:
         result_data = result_data[0]
     get_run_logger().info(message)
