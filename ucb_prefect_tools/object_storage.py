@@ -301,6 +301,7 @@ def sftp_list(connection_info: dict, file_prefix: str = ".") -> list[str]:
         f"SFTP: Finding files at '{directory}' with prefix '{prefix}' "
         f"on {connection_info['hostname']}"
     )
+    return []
     _make_ssh_key(connection_info)
     ssh = SSHClient()
     _load_known_hosts(ssh, connection_info)
