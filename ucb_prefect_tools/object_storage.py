@@ -295,12 +295,6 @@ def sftp_remove(file_path: str, connection_info: dict) -> None:
 def sftp_list(connection_info: dict, file_prefix: str = ".") -> list[str]:
     """Returns a list of filenames for files in the given folder. Folders are not included."""
 
-    directory = os.path.dirname(file_prefix)
-    prefix = os.path.basename(file_prefix)
-    get_run_logger().info(
-        f"SFTP: Finding files at '{directory}' with prefix '{prefix}' "
-        f"on {connection_info['hostname']}"
-    )
     return []
     _make_ssh_key(connection_info)
     ssh = SSHClient()
