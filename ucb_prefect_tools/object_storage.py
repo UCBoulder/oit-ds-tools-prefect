@@ -47,13 +47,6 @@ from .util import sizeof_fmt
 # General-purpose tasks and functions
 
 
-@task
-def join_path(left: str, right: str) -> str:
-    """Task wrapper for os.path.join, useful for getting full paths after calling list_files"""
-
-    return os.path.join(left, right)
-
-
 def _switch(connection_info, **kwargs):
     for key, value in kwargs.items():
         if connection_info["system_type"] == key:
