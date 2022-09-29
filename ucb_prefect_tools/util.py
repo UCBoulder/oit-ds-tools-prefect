@@ -99,10 +99,12 @@ def run_flow_command_line_interface(flow_filename, flow_function_name, args=None
 def _deploy(flow_filename, flow_function_name, options):
     # pylint:disable=too-many-locals
     # pylint:disable=too-many-branches
-    if options and options[0] == "--docker-label":
-        docker_label = options[1]
-    else:
-        docker_label = "main"
+    docker_label = "main"
+    if options:
+        if options[0] == "--docker-label":
+            docker_label = options[1]
+        else:
+            raise ValueError(f'Unrecognized option: {options[0]}')
 
     repo = git.Repo()
     cwd = os.getcwd()
