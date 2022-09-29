@@ -291,20 +291,6 @@ def sftp_remove(file_path: str, connection_info: dict) -> None:
     with _sftp_connection(ssh, connection_info) as sftp:
         sftp.remove(file_path)
 
-def test_log():
-    get_run_logger().info('hey')
-
-def test_log_thingy():
-    get_run_logger().info(SSHClient)
-
-def test_exception():
-    raise ValueError('plork')
-
-def test_exception_thingy():
-    key_type.from_private_key(
-        io.StringIO('nothing'), None
-    )
-
 def sftp_list(connection_info: dict, file_prefix: str = ".") -> list[str]:
     """Returns a list of filenames for files in the given folder. Folders are not included."""
 
