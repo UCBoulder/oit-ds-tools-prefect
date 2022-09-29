@@ -9,13 +9,17 @@ import email
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
+from contextlib import contextmanager
+import asyncio
+import uuid
 
-from prefect import task, get_run_logger, context
+from prefect import task, get_run_logger, tags
 from prefect.utilities.filesystem import set_default_ignore_file
 from prefect.deployments import Deployment
 from prefect.filesystems import RemoteFileSystem
 from prefect.blocks.system import Secret, JSON
 from prefect.infrastructure.docker import DockerContainer
+from prefect.client import get_client
 import git
 import pytz
 
@@ -78,7 +82,32 @@ def send_email(
                 [f"{i[1]} ({sizeof_fmt(len(i[0]))})" for i in attachments]
             )
         info += f":\n{body[:500]} ..."
-        get_run_logger().warn(info)
+        get_run_logger().warning(info)
+
+
+async def _set_concurrency_limit(tag, limit):
+    async with get_client() as client:
+        await client.create_concurrency_limit(tag=tag, concurrency_limit=limit)
+
+
+async def _remove_concurrency_limit(tag):
+    async with get_client() as client:
+        await client.delete_concurrency_limit_by_tag(tag=tag)
+
+
+@contextmanager
+def limit_concurrency(max_tasks):
+    """Context manager for applying a task concurrency limit via Prefect Cloud"""
+
+    tag = str(uuid.uuid4())
+    get_run_logger().info("Setting concurrency limit for tag %s to %s", tag, max_tasks)
+    asyncio.run(_set_concurrency_limit(tag, max_tasks))
+    try:
+        with tags(tag):
+            yield
+    finally:
+        asyncio.run(_remove_concurrency_limit(tag))
+        get_run_logger().info("Cleared concurrency limit for tag %s", tag)
 
 
 def run_flow_command_line_interface(flow_filename, flow_function_name, args=None):
@@ -99,10 +128,12 @@ def run_flow_command_line_interface(flow_filename, flow_function_name, args=None
 def _deploy(flow_filename, flow_function_name, options):
     # pylint:disable=too-many-locals
     # pylint:disable=too-many-branches
-    if options and options[0] == "--docker-label":
-        docker_label = options[1]
-    else:
-        docker_label = "main"
+    docker_label = "main"
+    if options:
+        if options[0] == "--docker-label":
+            docker_label = options[1]
+        else:
+            raise ValueError(f"Unrecognized option: {options[0]}")
 
     repo = git.Repo()
     cwd = os.getcwd()
@@ -135,8 +166,9 @@ def _deploy(flow_filename, flow_function_name, options):
             label = "dev"
             storage_path = f"dev/{repo_name}/{branch_name}"
 
+        image_uri = f"{DOCKER_REGISTRY}/{repo_name}:{docker_label}"
         docker = DockerContainer(
-            image=f"{DOCKER_REGISTRY}/{repo_name}:{docker_label}",
+            image=image_uri,
             image_pull_policy="ALWAYS",
             auto_remove=True,
         )
@@ -168,7 +200,7 @@ def _deploy(flow_filename, flow_function_name, options):
             storage=storage,
             apply=True,
         )
-        print(f"Deployed {deployment.name}")
+        print(f"Deployed {deployment.name} using docker image {image_uri}")
 
     finally:
         try:
@@ -191,7 +223,7 @@ def reveal_secrets(json_obj) -> dict:
         if isinstance(obj, str) and obj.startswith("<secret>"):
             try:
                 get_run_logger().info(
-                    f"Extracting value for {obj[8:]} from Secret Block"
+                    "Extracting value for %s from Secret Block", obj[8:]
                 )
             except RuntimeError:
                 # Called outside flow run: print instead

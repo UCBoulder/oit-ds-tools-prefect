@@ -291,8 +291,7 @@ def sftp_remove(file_path: str, connection_info: dict) -> None:
     with _sftp_connection(ssh, connection_info) as sftp:
         sftp.remove(file_path)
 
-
-def sftp_list(connection_info: dict, file_prefix: str = ".") -> list[str]:
+def sftp_list(connection_info: dict, file_prefix: str = "./") -> list[str]:
     """Returns a list of filenames for files in the given folder. Folders are not included."""
 
     directory = os.path.dirname(file_prefix)
