@@ -10,7 +10,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
 
-from prefect import task, get_run_logger, context
+from prefect import task, get_run_logger
 from prefect.utilities.filesystem import set_default_ignore_file
 from prefect.deployments import Deployment
 from prefect.filesystems import RemoteFileSystem
