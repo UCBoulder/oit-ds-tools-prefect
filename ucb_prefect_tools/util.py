@@ -135,8 +135,9 @@ def _deploy(flow_filename, flow_function_name, options):
             label = "dev"
             storage_path = f"dev/{repo_name}/{branch_name}"
 
+        image_uri = f"{DOCKER_REGISTRY}/{repo_name}:{docker_label}"
         docker = DockerContainer(
-            image=f"{DOCKER_REGISTRY}/{repo_name}:{docker_label}",
+            image=image_uri,
             image_pull_policy="ALWAYS",
             auto_remove=True,
         )
@@ -168,7 +169,7 @@ def _deploy(flow_filename, flow_function_name, options):
             storage=storage,
             apply=True,
         )
-        print(f"Deployed {deployment.name}")
+        print(f"Deployed {deployment.name} using docker image {image_uri}")
 
     finally:
         try:
