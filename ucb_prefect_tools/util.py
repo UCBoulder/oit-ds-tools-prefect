@@ -193,7 +193,7 @@ def _deploy(flow_filename, flow_function_name, options):
 
         deployment = Deployment.build_from_flow(
             flow=flow_function,
-            name=f"{module_name}-{label}-{branch_name}",
+            name=f"{module_name}-{branch_name}",
             tags=[label],
             work_queue_name=label,
             infrastructure=docker,
