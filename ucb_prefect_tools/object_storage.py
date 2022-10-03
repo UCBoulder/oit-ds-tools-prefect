@@ -67,31 +67,26 @@ def get(object_name: str, connection_info: dict) -> bytes:
 
 @task(name="object_storage.put")
 def put(
-    binary_object: Union[BinaryIO, bytes],
-    object_name: str,
-    connection_info: dict,
-    **kwargs,
+    binary_object: Union[BinaryIO, bytes], object_name: str, connection_info: dict
 ) -> None:
     """Writes a binary file-like object or bytes string with the given name to the identified
-    system. Additional kwargs can be specified for metadata, tags, etc. when using object storage.
-    """
+    system."""
 
     info = connection_info.copy()
     if not hasattr(binary_object, "read"):
         binary_object = io.BytesIO(binary_object)
     binary_object.seek(0)
     function = _switch(info, sftp=sftp_put, minio=minio_put, s3=s3_put)
-    function(binary_object, object_name, info, **kwargs)
+    function(binary_object, object_name, info)
 
 
 @task(name="object_storage.remove")
-def remove(object_name: str, connection_info: dict, **kwargs) -> None:
-    """Removes the identified file/object. Additional kwargs can be specified to, for example,
-    remove a particular version on certain systems."""
+def remove(object_name: str, connection_info: dict) -> None:
+    """Removes the identified file/object."""
 
     info = connection_info.copy()
     function = _switch(info, sftp=sftp_remove, minio=minio_remove, s3=s3_remove)
-    function(object_name, info, **kwargs)
+    function(object_name, info)
 
 
 @task(name="object_storage.list_names")
@@ -120,7 +115,9 @@ def store_dataframe(
     data.seek(0)
     function = _switch(info, sftp=sftp_put, minio=minio_put, s3=s3_put)
     get_run_logger().info(
-        f"Storing dataframe {object_name} with {len(dataframe.index)} rows in pickle format"
+        "Storing dataframe %s with %s rows in pickle format",
+        object_name,
+        len(dataframe.index),
     )
     function(data, object_name, info)
 
@@ -137,7 +134,7 @@ def retrieve_dataframe(object_name: str, connection_info: dict) -> pd.DataFrame:
     data = io.BytesIO(contents)
     out = pd.read_pickle(data)
     get_run_logger().info(
-        f"Retrieved dataframe {object_name} with {len(out.index)} rows"
+        "Retrieved dataframe %s with %s rows", object_name, len(out.index)
     )
     return out
 
@@ -158,7 +155,7 @@ def _make_ssh_key(connection_info):
                     io.StringIO(connection_info["pkey"]), password
                 )
                 get_run_logger().info(
-                    f"SFTP: Loaded SSH private key using class {key_type}"
+                    "SFTP: Loaded SSH private key using class %s", key_type
                 )
                 connection_info["pkey"] = pkey
                 return
@@ -224,7 +221,8 @@ def _sftp_connection(ssh_client, connection_info):
     except AuthenticationException:
         get_run_logger().error(
             "Paramiko SSH Authentication failed. You may need to specify 'disabled_algorithms'. "
-            f"See logs:\n\n{stream.getvalue()}"
+            "See logs:\n\n%s",
+            stream.getvalue(),
         )
         raise
     finally:
@@ -238,7 +236,7 @@ def sftp_get(file_path: str, connection_info: dict) -> bytes:
     """Returns the bytes content for the file at the given path from an SFTP server."""
 
     get_run_logger().info(
-        f"SFTP: Getting file {file_path} from {connection_info['hostname']}"
+        "SFTP: Getting file %s from %s", file_path, connection_info["hostname"]
     )
     _make_ssh_key(connection_info)
     ssh = SSHClient()
@@ -252,23 +250,20 @@ def sftp_get(file_path: str, connection_info: dict) -> bytes:
                 f'File {file_path} not found on {connection_info["hostname"]}'
             ) from err
         out = out.getvalue()
-    get_run_logger().info(f"SFTP: Got {sizeof_fmt(len(out))} file")
+    get_run_logger().info("SFTP: Got %s file", sizeof_fmt(len(out)))
     return out
 
 
-def sftp_put(
-    file_object: BinaryIO, file_path: str, connection_info: dict, **kwargs
-) -> None:
+def sftp_put(file_object: BinaryIO, file_path: str, connection_info: dict) -> None:
     """Writes a file-like object or bytes string to the given path on an SFTP server."""
 
-    if kwargs:
-        get_run_logger().warning(
-            f"Additional kwargs not supported by SFTP: {kwargs.keys()}"
-        )
     size = file_object.seek(0, 2)
     file_object.seek(0)
     get_run_logger().info(
-        f"SFTP: Putting file {file_path} ({sizeof_fmt(size)}) onto {connection_info['hostname']}"
+        "SFTP: Putting file %s (%s) onto %s",
+        file_path,
+        sizeof_fmt(size),
+        connection_info["hostname"],
     )
     _make_ssh_key(connection_info)
     ssh = SSHClient()
@@ -283,7 +278,7 @@ def sftp_remove(file_path: str, connection_info: dict) -> None:
     """Removes the identified file."""
 
     get_run_logger().info(
-        f"SFTP: Removing file {file_path} from {connection_info['hostname']}"
+        "SFTP: Removing file %s from %s", file_path, connection_info["hostname"]
     )
     _make_ssh_key(connection_info)
     ssh = SSHClient()
@@ -291,14 +286,17 @@ def sftp_remove(file_path: str, connection_info: dict) -> None:
     with _sftp_connection(ssh, connection_info) as sftp:
         sftp.remove(file_path)
 
+
 def sftp_list(connection_info: dict, file_prefix: str = "./") -> list[str]:
     """Returns a list of filenames for files in the given folder. Folders are not included."""
 
     directory = os.path.dirname(file_prefix)
     prefix = os.path.basename(file_prefix)
     get_run_logger().info(
-        f"SFTP: Finding files at '{directory}' with prefix '{prefix}' "
-        f"on {connection_info['hostname']}"
+        "SFTP: Finding files at '%s' with prefix '%s' on %s",
+        directory,
+        prefix,
+        connection_info["hostname"],
     )
     _make_ssh_key(connection_info)
     ssh = SSHClient()
@@ -309,7 +307,7 @@ def sftp_list(connection_info: dict, file_prefix: str = "./") -> list[str]:
             for i in sftp.listdir_attr(directory)
             if stat.S_ISREG(i.st_mode) and i.filename.startswith(prefix)
         ]
-    get_run_logger().info(f"SFTP: Found {len(out)} files")
+    get_run_logger().info("SFTP: Found %s files", len(out))
     return out
 
 
@@ -324,8 +322,10 @@ def minio_get(object_name: str, connection_info: dict) -> bytes:
     bucket = connection_info["bucket"]
     del connection_info["bucket"]
     get_run_logger().info(
-        f"Minio: Getting object {object_name} from "
-        f'bucket {bucket} on {connection_info["endpoint"]}'
+        "Minio: Getting object %s from bucket %s on %s",
+        object_name,
+        bucket,
+        connection_info["endpoint"],
     )
     minio = Minio(**connection_info)
     try:
@@ -344,13 +344,11 @@ def minio_get(object_name: str, connection_info: dict) -> bytes:
         except NameError:
             # response never got defined
             pass
-    get_run_logger().info(f"Minio: Got {sizeof_fmt(len(out))} object")
+    get_run_logger().info("Minio: Got %s object", sizeof_fmt(len(out)))
     return out
 
 
-def minio_put(
-    binary_object: BinaryIO, object_name: str, connection_info: dict, **kwargs
-) -> None:
+def minio_put(binary_object: BinaryIO, object_name: str, connection_info: dict) -> None:
     """Puts the given BinaryIO object into a Minio bucket. Any additional keyword arguments are
     passed to the Minio.put_object function."""
 
@@ -361,16 +359,15 @@ def minio_put(
     size = binary_object.seek(0, 2)
     binary_object.seek(0)
     get_run_logger().info(
-        f"Minio: Putting object {object_name} ({sizeof_fmt(size)}) into "
-        f'bucket {bucket} on {connection_info["endpoint"]}'
+        "Minio: Putting object %s (%s) into bucket %s on %s",
+        object_name,
+        sizeof_fmt(size),
+        bucket,
+        connection_info["endpoint"],
     )
     minio = Minio(**connection_info)
     minio.put_object(
-        bucket_name=bucket,
-        object_name=object_name,
-        data=binary_object,
-        length=size,
-        **kwargs,
+        bucket_name=bucket, object_name=object_name, data=binary_object, length=size
     )
 
 
@@ -382,8 +379,10 @@ def minio_remove(object_name: str, connection_info: dict) -> None:
     bucket = connection_info["bucket"]
     del connection_info["bucket"]
     get_run_logger().info(
-        f"Minio: Removing object {object_name} from "
-        f'bucket {bucket} on {connection_info["endpoint"]}'
+        "Minio: Removing object %s from bucket %s on %s",
+        object_name,
+        bucket,
+        connection_info["endpoint"],
     )
     minio = Minio(**connection_info)
     minio.remove_object(bucket, object_name)
@@ -397,12 +396,14 @@ def minio_list(connection_info: dict, prefix: str = "") -> list[str]:
     bucket = connection_info["bucket"]
     del connection_info["bucket"]
     get_run_logger().info(
-        f'Minio: Finding files with prefix "{prefix}" in '
-        f'bucket {bucket} on {connection_info["endpoint"]}'
+        'Minio: Finding files with prefix "%s" in bucket %s on %s',
+        prefix,
+        bucket,
+        connection_info["endpoint"],
     )
     minio = Minio(**connection_info)
     out = [i.object_name for i in minio.list_objects(bucket, prefix=prefix)]
-    get_run_logger().info(f"Minio: Found {len(out)} files")
+    get_run_logger().info("Minio: Found %s files", len(out))
     return out
 
 
@@ -415,7 +416,7 @@ def s3_get(object_key: str, connection_info: dict) -> bytes:
     bucket = connection_info["bucket"]
     del connection_info["bucket"]
     get_run_logger().info(
-        f"Amazon S3: Getting object {object_key} from bucket {bucket}"
+        "Amazon S3: Getting object %s from bucket %s", object_key, bucket
     )
     session = boto3.session.Session(**connection_info)
     s3res = session.resource("s3")
@@ -430,7 +431,7 @@ def s3_get(object_key: str, connection_info: dict) -> bytes:
             ) from err
         raise
     out = data.getvalue()
-    get_run_logger().info(f"Amazon S3: Got {sizeof_fmt(len(out))} object")
+    get_run_logger().info("Amazon S3: Got %s object", sizeof_fmt(len(out)))
     return out
 
 
@@ -449,7 +450,10 @@ def s3_put(
     size = binary_object.seek(0, 2)
     binary_object.seek(0)
     get_run_logger().info(
-        f"Amazon S3: Putting object {object_key} ({sizeof_fmt(size)}) into bucket {bucket}"
+        "Amazon S3: Putting object %s (%s) into bucket %s",
+        object_key,
+        sizeof_fmt(size),
+        bucket,
     )
     session = boto3.session.Session(**connection_info)
     s3res = session.resource("s3")
@@ -472,7 +476,7 @@ def s3_remove(object_key: str, connection_info: dict, VersionId: str = None) -> 
     bucket = connection_info["bucket"]
     del connection_info["bucket"]
     get_run_logger().info(
-        f"Amazon S3: Removing object {object_key} from bucket {bucket}"
+        "Amazon S3: Removing object %s from bucket %s", object_key, bucket
     )
     session = boto3.session.Session(**connection_info)
     s3res = session.resource("s3")
@@ -488,11 +492,11 @@ def s3_list(connection_info: dict, Prefix: str = "") -> list[str]:
     bucket = connection_info["bucket"]
     del connection_info["bucket"]
     get_run_logger().info(
-        f'Amazon S3: Finding files with prefix "{Prefix}" in bucket {bucket}'
+        'Amazon S3: Finding files with prefix "%s" in bucket %s', Prefix, bucket
     )
     session = boto3.session.Session(**connection_info)
     s3res = session.resource("s3")
     bucket = s3res.Bucket(bucket)
     out = [i.key for i in bucket.objects.filter(Prefix=Prefix)]
-    get_run_logger().info(f"Amazon S3: Found {len(out)} files")
+    get_run_logger().info("Amazon S3: Found %s files", len(out))
     return out
