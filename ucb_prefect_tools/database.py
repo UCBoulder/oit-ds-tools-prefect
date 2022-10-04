@@ -447,7 +447,7 @@ def _oracle_execute_statements(conn, cursor, host, statements, query_params=None
                 log_str += f"\nwith injected params: {params}"
             get_run_logger().info(log_str)
             if params:
-                cursor.execute(sql, parameters=params)
+                cursor.execute(sql, params)
             else:
                 cursor.execute(sql)
     except cx_Oracle.DatabaseError as exc:
@@ -690,6 +690,6 @@ def _postgre_execute_statements(cursor, host, statements, query_params=None):
             log_str += f"\nwith injected params: {params}"
         get_run_logger().info(log_str)
         if params:
-            cursor.execute(sql, parameters=params)
+            cursor.execute(sql, params)
         else:
             cursor.execute(sql)
