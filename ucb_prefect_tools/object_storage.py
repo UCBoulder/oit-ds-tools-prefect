@@ -334,7 +334,7 @@ def minio_get(object_name: str, connection_info: dict) -> bytes:
     except S3Error as err:
         if err.code == "NoSuchKey":
             raise FileNotFoundError(
-                f'Object {object_name} not found on {connection_info["hostname"]}'
+                f'Object {object_name} not found on {bucket}'
             ) from err
         raise
     finally:
@@ -427,7 +427,7 @@ def s3_get(object_key: str, connection_info: dict) -> bytes:
     except botocore.exceptions.ClientError as err:
         if err.response["Error"]["Code"] == "404":
             raise FileNotFoundError(
-                f'Object {object_key} not found on {connection_info["hostname"]}'
+                f'Object {object_key} not found in {bucket}'
             ) from err
         raise
     out = data.getvalue()
