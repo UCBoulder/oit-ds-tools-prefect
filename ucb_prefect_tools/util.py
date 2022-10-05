@@ -27,6 +27,7 @@ DOCKER_REGISTRY = "oit-data-services-docker-local.artifactory.colorado.edu"
 LOCAL_FLOW_FOLDER = "flows"
 FLOW_STORAGE_CONNECTION_BLOCK = "ds-flow-storage"
 TIMEZONE = "America/Denver"
+REPO_PREFIX = "oit-ds-flows-"
 
 
 @task
@@ -149,6 +150,7 @@ def _deploy(flow_filename, flow_function_name, options):
             print("Created default .prefectignore file")
 
         repo_name = os.path.basename(repo.working_dir)
+        repo_short_name = repo_name.removeprefix(REPO_PREFIX)
         module_name = os.path.splitext(flow_filename)[0]
         try:
             flow_function = getattr(sys.modules["__main__"], flow_function_name)
@@ -193,7 +195,7 @@ def _deploy(flow_filename, flow_function_name, options):
 
         deployment = Deployment.build_from_flow(
             flow=flow_function,
-            name=f"{module_name}-{branch_name}",
+            name=f"{repo_short_name} | {branch_name} | {module_name}",
             tags=[label],
             work_queue_name=label,
             infrastructure=docker,
