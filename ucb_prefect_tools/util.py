@@ -13,7 +13,7 @@ from contextlib import contextmanager
 import asyncio
 import uuid
 
-from prefect import task, get_run_logger, tags
+from prefect import task, get_run_logger, tags, context
 from prefect.utilities.filesystem import set_default_ignore_file
 from prefect.deployments import Deployment
 from prefect.filesystems import RemoteFileSystem
@@ -107,6 +107,8 @@ def limit_concurrency(max_tasks):
         with tags(tag):
             yield
     finally:
+        for future in context.get_run_context().task_run_futures:
+            future.wait()
         asyncio.run(_remove_concurrency_limit(tag))
         get_run_logger().info("Cleared concurrency limit for tag %s", tag)
 
