@@ -183,7 +183,13 @@ def get_many(
     # filter and return results
     filled_results = [i for i in results if not i is None]
     ignored = len(results) - len(filled_results)
-    total_size = sizeof_fmt(sum([size for response, size in filled_results]))
+    # sum up sizes, skipping exceptions
+    total_size = sizeof_fmt(
+        sum(
+            0 if isinstance(result, BaseException) else result[1]
+            for result in filled_results
+        )
+    )
     get_run_logger().info(
         f"REST: Received {len(filled_results)} responses ({total_size}), with {ignored} ignored"
     )
@@ -526,7 +532,9 @@ def _send_modify_requests(
                     break
 
     # return results
-    total_size = sum([size for response, size in results])
+    total_size = sum(
+        0 if isinstance(result, BaseException) else result[1] for result in results
+    )
     get_run_logger().info(
         f"REST: Received {len(results)} responses ({sizeof_fmt(total_size)} total)"
     )
