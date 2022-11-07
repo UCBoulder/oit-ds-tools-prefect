@@ -23,11 +23,14 @@ from prefect.client import get_client
 import git
 import pytz
 
+# Overrideable settings related to deployments
 DOCKER_REGISTRY = "oit-data-services-docker-local.artifactory.colorado.edu"
 LOCAL_FLOW_FOLDER = "flows"
 FLOW_STORAGE_CONNECTION_BLOCK = "ds-flow-storage"
-TIMEZONE = "America/Denver"
 REPO_PREFIX = "oit-ds-flows-"
+
+# Timezone for `now` function
+TIMEZONE = "America/Denver"
 
 
 @task
@@ -131,45 +134,61 @@ def run_flow_command_line_interface(flow_filename, flow_function_name, args=None
 def _deploy(flow_filename, flow_function_name, options):
     # pylint:disable=too-many-locals
     # pylint:disable=too-many-branches
+    # pylint:disable=too-many-statements
+
+    # Parse options and check file locations
     docker_label = "main"
     if options:
         if options[0] == "--docker-label":
             docker_label = options[1]
         else:
             raise ValueError(f"Unrecognized option: {options[0]}")
+    if set_default_ignore_file(LOCAL_FLOW_FOLDER):
+        print("Created default .prefectignore file")
+    flow_filename = os.path.basename(flow_filename)
+    if not os.path.exists(os.path.join(LOCAL_FLOW_FOLDER, flow_filename)):
+        raise FileNotFoundError(
+            f"File {flow_filename} not found in the {LOCAL_FLOW_FOLDER} folder"
+        )
 
+    # Get git repo information and validate state
     repo = git.Repo()
+    repo_name = os.path.basename(repo.working_dir)
+    repo_short_name = repo_name.removeprefix(REPO_PREFIX)
+    branch_name = repo.active_branch.name
+    if branch_name == "main":
+        # For main, raise error if current commit doesn't match origin commit
+        if repo.head.commit != repo.remotes.origin.fetch()[0].commit:
+            raise RuntimeError(
+                "You are attempting to deploy from `main`, but HEAD is not on the "
+                "same commit as remote `origin`. Push or pull changes to continue."
+            )
+        # For main, also raise error if working tree is dirty (not counting untracked files)
+        if repo.is_dirty():
+            raise RuntimeError(
+                "You are attempting to deploy from `main`, but your working tree is not clean. "
+                "Commit or discard changes to continue."
+            )
+        label = "main"
+        storage_path = f"main/{repo_name}"
+    else:
+        label = "dev"
+        storage_path = f"dev/{repo_name}/{branch_name}"
+
+    # Change into the flows folder and change back when done
     cwd = os.getcwd()
     os.chdir(LOCAL_FLOW_FOLDER)
-
     try:
-        flow_filename = os.path.basename(flow_filename)
-        if not os.path.exists(flow_filename):
-            raise FileNotFoundError(
-                f"File {flow_filename} not found in the {LOCAL_FLOW_FOLDER} folder"
-            )
-        if set_default_ignore_file("."):
-            print("Created default .prefectignore file")
 
-        repo_name = os.path.basename(repo.working_dir)
-        repo_short_name = repo_name.removeprefix(REPO_PREFIX)
+        # Import the module and flow
         module_name = os.path.splitext(flow_filename)[0]
         try:
             flow_function = getattr(sys.modules["__main__"], flow_function_name)
         except KeyError:
             module = importlib.import_module(module_name)
             flow_function = getattr(module, flow_function_name)
-        branch_name = repo.active_branch.name
-        if branch_name == "main":
-            label = "main"
-            storage_path = f"main/{repo_name}"
-            flow_function = flow_function.with_options(
-                retries=1, retry_delay_seconds=5 * 60
-            )
-        else:
-            label = "dev"
-            storage_path = f"dev/{repo_name}/{branch_name}"
 
+        # Create docker infrastructure
         image_uri = f"{DOCKER_REGISTRY}/{repo_name}:{docker_label}"
         docker = DockerContainer(
             image=image_uri,
@@ -177,6 +196,7 @@ def _deploy(flow_filename, flow_function_name, options):
             auto_remove=True,
         )
 
+        # Create flow storage infrastructure
         storage_conn = reveal_secrets(JSON.load(FLOW_STORAGE_CONNECTION_BLOCK).value)
         if storage_conn["system_type"] == "minio":
             endpoint_url = storage_conn["endpoint"]
@@ -195,6 +215,7 @@ def _deploy(flow_filename, flow_function_name, options):
                 f'Flow storage connection system type {storage_conn["system_type"]} not supported'
             )
 
+        # Deploy flow
         deployment = Deployment.build_from_flow(
             flow=flow_function,
             name=f"{repo_short_name} | {branch_name} | {module_name}",
