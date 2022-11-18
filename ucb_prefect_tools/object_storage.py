@@ -6,6 +6,7 @@ supported systems:
     - "sftp" for paramiko.client.SSHClient.connect
     - "minio" for minio.Minio
     - "s3" for boto3.session.Session
+    - "smb" for smb.SMBConnection
 
 The remaining KVs of connection_info should map directly to the keyword arguments used in calling
 the constructor indicated in the list above, with some exceptions:
@@ -16,6 +17,8 @@ the constructor indicated in the list above, with some exceptions:
         function.
     - For minio, must include an additional "bucket" argument for the bucket name. Also, if
         "secure" is omitted, it defaults to True.
+    - For smb, must include a "port" arg. The service name should be specified by the first element
+        in the file path, preceded by a "/". IP address and "my_name" are automatically derived.
 """
 
 import io
@@ -25,6 +28,7 @@ import os
 import stat
 import logging
 from contextlib import contextmanager
+import socket
 
 from prefect import task, get_run_logger
 from prefect.blocks.system import JSON
@@ -39,6 +43,8 @@ from minio import Minio
 from minio.error import S3Error
 import boto3
 import botocore
+from smb.SMBConnection import SMBConnection
+from smb.base import OperationFailure
 
 from .util import sizeof_fmt
 
@@ -61,7 +67,7 @@ def get(object_name: str, connection_info: dict) -> bytes:
     FileNotFoundError if the file could not be found."""
 
     info = connection_info.copy()
-    function = _switch(info, sftp=sftp_get, minio=minio_get, s3=s3_get)
+    function = _switch(info, sftp=sftp_get, minio=minio_get, s3=s3_get, smb=smb_get)
     return function(object_name, info)
 
 
@@ -76,7 +82,7 @@ def put(
     if not hasattr(binary_object, "read"):
         binary_object = io.BytesIO(binary_object)
     binary_object.seek(0)
-    function = _switch(info, sftp=sftp_put, minio=minio_put, s3=s3_put)
+    function = _switch(info, sftp=sftp_put, minio=minio_put, s3=s3_put, smb=smb_put)
     function(binary_object, object_name, info)
 
 
@@ -85,7 +91,9 @@ def remove(object_name: str, connection_info: dict) -> None:
     """Removes the identified file/object."""
 
     info = connection_info.copy()
-    function = _switch(info, sftp=sftp_remove, minio=minio_remove, s3=s3_remove)
+    function = _switch(
+        info, sftp=sftp_remove, minio=minio_remove, s3=s3_remove, smb=smb_remove
+    )
     function(object_name, info)
 
 
@@ -95,7 +103,7 @@ def list_names(connection_info: dict, prefix: str = None) -> list[str]:
     which includes directory path for file systems. Folders are not included; non-recursive."""
 
     info = connection_info.copy()
-    function = _switch(info, sftp=sftp_list, minio=minio_list, s3=s3_list)
+    function = _switch(info, sftp=sftp_list, minio=minio_list, s3=s3_list, smb=smb_list)
     if prefix:
         return function(info, prefix)
     return function(info)
@@ -113,7 +121,7 @@ def store_dataframe(
     data = io.BytesIO()
     dataframe.to_pickle(data)
     data.seek(0)
-    function = _switch(info, sftp=sftp_put, minio=minio_put, s3=s3_put)
+    function = _switch(info, sftp=sftp_put, minio=minio_put, s3=s3_put, smb=smb_put)
     get_run_logger().info(
         "Storing dataframe %s with %s rows in pickle format",
         object_name,
@@ -129,7 +137,7 @@ def retrieve_dataframe(object_name: str, connection_info: dict) -> pd.DataFrame:
     """
 
     info = connection_info.copy()
-    function = _switch(info, sftp=sftp_get, minio=minio_get, s3=s3_get)
+    function = _switch(info, sftp=sftp_get, minio=minio_get, s3=s3_get, smb=smb_get)
     contents = function(object_name, info)
     data = io.BytesIO(contents)
     out = pd.read_pickle(data)
@@ -288,7 +296,8 @@ def sftp_remove(file_path: str, connection_info: dict) -> None:
 
 
 def sftp_list(connection_info: dict, file_prefix: str = "./") -> list[str]:
-    """Returns a list of filenames for files in the given folder. Folders are not included."""
+    """Returns a list of filenames for files with the given path prefix. Only the filenames are
+    returned, without folder paths."""
 
     directory = os.path.dirname(file_prefix)
     prefix = os.path.basename(file_prefix)
@@ -334,7 +343,7 @@ def minio_get(object_name: str, connection_info: dict) -> bytes:
     except S3Error as err:
         if err.code == "NoSuchKey":
             raise FileNotFoundError(
-                f'Object {object_name} not found on {bucket}'
+                f"Object {object_name} not found on {bucket}"
             ) from err
         raise
     finally:
@@ -427,7 +436,7 @@ def s3_get(object_key: str, connection_info: dict) -> bytes:
     except botocore.exceptions.ClientError as err:
         if err.response["Error"]["Code"] == "404":
             raise FileNotFoundError(
-                f'Object {object_key} not found in {bucket}'
+                f"Object {object_key} not found in {bucket}"
             ) from err
         raise
     out = data.getvalue()
@@ -499,4 +508,156 @@ def s3_list(connection_info: dict, Prefix: str = "") -> list[str]:
     bucket = s3res.Bucket(bucket)
     out = [i.key for i in bucket.objects.filter(Prefix=Prefix)]
     get_run_logger().info("Amazon S3: Found %s files", len(out))
+    return out
+
+
+# SMB functions
+
+
+def smb_get(file_path: str, connection_info: dict) -> bytes:
+    """Returns the bytes content for the given file on an SMB server."""
+
+    server_ip = socket.gethostbyname(connection_info["remote_name"])
+    port = connection_info.pop("port", None)
+    if not file_path.startswith("/"):
+        raise ValueError(
+            "File path must start with '/' followed by the SMB service name"
+        )
+    service_name = file_path.split("/")[1]
+    file_path = file_path.removeprefix(f"/{service_name}")
+    get_run_logger().info(
+        "SMB: Getting file %s from %s on %s",
+        file_path,
+        service_name,
+        connection_info["remote_name"],
+    )
+    with SMBConnection(
+        my_name=socket.gethostname(),
+        sign_options=SMBConnection.SIGN_WHEN_SUPPORTED,
+        use_ntlm_v2=True,
+        **connection_info,
+    ) as conn:
+        if not conn.connect(server_ip, port):
+            raise RuntimeError(
+                f'Unable to connect to {connection_info["remote_name"]} ({server_ip}): '
+                "Authentication failed"
+            )
+        out = io.BytesIO()
+        try:
+            conn.retrieveFile(service_name, file_path, out)
+        except OperationFailure as err:
+            raise FileNotFoundError(
+                f'File {file_path} not found in {service_name} on {connection_info["remote_name"]}'
+            ) from err
+    out = out.getvalue()
+    get_run_logger().info("SMB: Got %s file", sizeof_fmt(len(out)))
+    return out
+
+
+def smb_put(
+    file_object: BinaryIO,
+    file_path: str,
+    connection_info: dict,
+) -> None:
+    """Writes a file-like object or bytes string tot he given path on an SMB server."""
+
+    size = file_object.seek(0, 2)
+    file_object.seek(0)
+    server_ip = socket.gethostbyname(connection_info["remote_name"])
+    port = connection_info.pop("port", None)
+    if not file_path.startswith("/"):
+        raise ValueError(
+            "File path must start with '/' followed by the SMB service name"
+        )
+    service_name = file_path.split("/")[1]
+    file_path = file_path.removeprefix(f"/{service_name}")
+    get_run_logger().info(
+        "SMB: Putting file %s (%s) in %s on %s",
+        file_path,
+        sizeof_fmt(size),
+        service_name,
+        connection_info["remote_name"],
+    )
+    with SMBConnection(
+        my_name=socket.gethostname(),
+        sign_options=SMBConnection.SIGN_WHEN_SUPPORTED,
+        use_ntlm_v2=True,
+        **connection_info,
+    ) as conn:
+        if not conn.connect(server_ip, port):
+            raise RuntimeError(
+                f'Unable to connect to {connection_info["remote_name"]} ({server_ip}): '
+                "Authentication failed"
+            )
+        conn.createDirectory(service_name, os.path.dirname(file_path))
+        conn.storeFile(service_name, file_path, file_object)
+
+
+def smb_remove(file_path: str, connection_info: dict) -> None:
+    """Removes the identified file"""
+
+    server_ip = socket.gethostbyname(connection_info["remote_name"])
+    port = connection_info.pop("port", None)
+    if not file_path.startswith("/"):
+        raise ValueError(
+            "File path must start with '/' followed by the SMB service name"
+        )
+    service_name = file_path.split("/")[1]
+    file_path = file_path.removeprefix(f"/{service_name}")
+    get_run_logger().info(
+        "SMB: Removing file %s from %s on %s",
+        file_path,
+        service_name,
+        connection_info["remote_name"],
+    )
+    with SMBConnection(
+        my_name=socket.gethostname(),
+        sign_options=SMBConnection.SIGN_WHEN_SUPPORTED,
+        use_ntlm_v2=True,
+        **connection_info,
+    ) as conn:
+        if not conn.connect(server_ip, port):
+            raise RuntimeError(
+                f'Unable to connect to {connection_info["remote_name"]} ({server_ip}): '
+                "Authentication failed"
+            )
+        conn.deleteFiles(service_name, file_path)
+
+
+def smb_list(connection_info: dict, prefix: str = "./") -> list[str]:
+    """Returns a list of filenames for files with the given path prefix. Only the filenames are
+    returned, without folder paths."""
+
+    server_ip = socket.gethostbyname(connection_info["remote_name"])
+    port = connection_info.pop("port", None)
+    if not prefix.startswith("/"):
+        raise ValueError("Prefix must start with '/' followed by the SMB service name")
+    service_name = prefix.split("/")[1]
+    prefix = prefix.removeprefix(f"/{service_name}")
+    get_run_logger().info(
+        "SMB: Finding files at '%s' in %s on %s",
+        prefix,
+        service_name,
+        connection_info["remote_name"],
+    )
+    with SMBConnection(
+        my_name=socket.gethostname(),
+        sign_options=SMBConnection.SIGN_WHEN_SUPPORTED,
+        use_ntlm_v2=True,
+        **connection_info,
+    ) as conn:
+        if not conn.connect(server_ip, port):
+            raise RuntimeError(
+                f"Unable to connect to {connection_info['remote_name']} ({server_ip}): "
+                "Authentication failed"
+            )
+        out = [
+            i.filename
+            for i in conn.listPath(
+                service_name,
+                path=os.path.dirname(prefix),
+                pattern=f"{os.path.basename(prefix)}*",
+            )
+        ]
+    get_run_logger().info("SMB: Found %s files", len(out))
     return out
