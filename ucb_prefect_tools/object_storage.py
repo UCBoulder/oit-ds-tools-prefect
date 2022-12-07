@@ -589,7 +589,11 @@ def smb_put(
                 f'Unable to connect to {connection_info["remote_name"]} ({server_ip}): '
                 "Authentication failed"
             )
-        conn.createDirectory(service_name, os.path.dirname(file_path))
+        try:
+            conn.createDirectory(service_name, os.path.dirname(file_path))
+        except OperationFailure:
+            # directory already exists
+            pass
         conn.storeFile(service_name, file_path, file_object)
 
 
