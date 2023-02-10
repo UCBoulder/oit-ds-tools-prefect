@@ -515,6 +515,9 @@ def odbc_connect(**kwargs):
     E.g. passing uid="myself" adds the element "UID=myself;" to the connection string.
     """
 
+    # Passwords with special characters must be escaped
+    # See https://github.com/mkleehammer/pyodbc/issues/569#issuecomment-496234942
+    kwargs["pwd"] = "{" + kwargs["pwd"].replace("}", "}}") + "}"
     connection_string = ";".join([f"{k.upper()}={v}" for k, v in kwargs.items()])
     return pyodbc.connect(connection_string)
 
@@ -546,7 +549,10 @@ def get_sql_extract(system_type, connection_func):
                 f"The lob_columns parameter is not supported for {system_type} databases."
             )
         with connection_func(**connection_info) as conn:
-            host = connection_info["host"]
+            if system_type == "ODBC":
+                host = connection_info["server"]
+            else:
+                host = connection_info["host"]
             sql_snip = " ".join(sql_query.split())[:200] + " ..."
             log_str = f"{system_type}: Reading from {host}: {sql_snip}"
             if query_params:
@@ -621,7 +627,10 @@ def get_insert(system_type, connection_func):
         ]
 
         with connection_func(**connection_info) as conn:
-            host = connection_info["host"]
+            if system_type == "ODBC":
+                host = connection_info["server"]
+            else:
+                host = connection_info["host"]
             cursor = conn.cursor()
 
             _execute_statements(
@@ -721,7 +730,10 @@ def get_update(system_type, connection_func):
         ]
 
         with connection_func(**connection_info) as conn:
-            host = connection_info["host"]
+            if system_type == "ODBC":
+                host = connection_info["server"]
+            else:
+                host = connection_info["host"]
             cursor = conn.cursor()
 
             _execute_statements(
@@ -793,7 +805,10 @@ def get_execute_sql(system_type, connection_func):
             query_params = [query_params]
 
         with connection_func(**connection_info) as conn:
-            host = connection_info["host"]
+            if system_type == "ODBC":
+                host = connection_info["server"]
+            else:
+                host = connection_info["host"]
             cursor = conn.cursor()
             _execute_statements(system_type, cursor, host, sql_statement, query_params)
             conn.commit()
