@@ -411,7 +411,10 @@ def minio_list(connection_info: dict, prefix: str = "") -> list[str]:
         connection_info["endpoint"],
     )
     minio = Minio(**connection_info)
-    out = [i.object_name for i in minio.list_objects(bucket, prefix=prefix)]
+    out = [
+        os.path.basename(i.object_name)
+        for i in minio.list_objects(bucket, prefix=prefix)
+    ]
     get_run_logger().info("Minio: Found %s files", len(out))
     return out
 
@@ -506,7 +509,7 @@ def s3_list(connection_info: dict, Prefix: str = "") -> list[str]:
     session = boto3.session.Session(**connection_info)
     s3res = session.resource("s3")
     bucket = s3res.Bucket(bucket)
-    out = [i.key for i in bucket.objects.filter(Prefix=Prefix)]
+    out = [os.path.basename(i.key) for i in bucket.objects.filter(Prefix=Prefix)]
     get_run_logger().info("Amazon S3: Found %s files", len(out))
     return out
 
