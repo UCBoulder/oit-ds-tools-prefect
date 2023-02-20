@@ -519,7 +519,7 @@ def odbc_connect(**kwargs):
     # See https://github.com/mkleehammer/pyodbc/issues/569#issuecomment-496234942
     kwargs["pwd"] = "{" + kwargs["pwd"].replace("}", "}}") + "}"
     connection_string = ";".join([f"{k.upper()}={v}" for k, v in kwargs.items()])
-    return pyodbc.connect(connection_string)
+    return pyodbc.connect(connection_string, timeout=60)
 
 
 ##########
