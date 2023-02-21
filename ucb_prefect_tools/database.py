@@ -5,6 +5,8 @@ connect to. It should always have a "system_type" member identifying one of the 
 supported system:
     - "oracle" for cx_Oracle.connect
     - "postgre" for psycopg2.connect
+    - "odbc" for odbc_connect (see below), a helper function that turns keyword args into an odbc
+        connection string
 
 The remaining KVs of connection_info should map directly to the keyword arguments used in calling
 the constructor indicated in the list above, with some exceptions:
@@ -12,8 +14,11 @@ the constructor indicated in the list above, with some exceptions:
         string as the "dsn" argument, so instead pass "host", "port", and "sid" individually.
 """
 
+# pylint:disable=broad-except
+
 import cx_Oracle
 import psycopg2
+import pyodbc
 from prefect import task, get_run_logger
 import pandas as pd
 
@@ -50,7 +55,12 @@ def sql_extract(
     # pylint:disable=too-many-arguments
 
     info = connection_info.copy()
-    function = _switch(info, oracle=oracle_sql_extract, postgre=postgre_sql_extract)
+    function = _switch(
+        info,
+        oracle=oracle_sql_extract,
+        postgre=get_sql_extract("Postgre", psycopg2.connect),
+        odbc=get_sql_extract("ODBC", odbc_connect),
+    )
     dataframe = function(
         sql_query, info, query_params, lob_columns, chunks_prefix, chunksize
     )
@@ -82,7 +92,12 @@ def insert(
     # pylint:disable=too-many-arguments
 
     info = connection_info.copy()
-    function = _switch(info, oracle=oracle_insert, postgre=postgre_insert)
+    function = _switch(
+        info,
+        oracle=oracle_insert,
+        postgre=get_insert("Postgre", psycopg2.connect),
+        odbc=get_insert("ODBC", odbc_connect),
+    )
     return function(
         dataframe,
         table_identifier,
@@ -120,7 +135,12 @@ def update(
     # pylint:disable=too-many-arguments
 
     info = connection_info.copy()
-    function = _switch(info, oracle=oracle_update, postgre=postgre_update)
+    function = _switch(
+        info,
+        oracle=oracle_update,
+        postgre=get_update("Postgre", psycopg2.connect),
+        odbc=get_update("ODBC", odbc_connect),
+    )
     return function(
         dataframe,
         table_identifier,
@@ -138,7 +158,12 @@ def execute_sql(sql_statement: str, connection_info: dict, query_params=None):
     bind variables for the query."""
 
     info = connection_info.copy()
-    function = _switch(info, oracle=oracle_execute_sql, postgre=postgre_execute_sql)
+    function = _switch(
+        info,
+        oracle=oracle_execute_sql,
+        postgre=get_execute_sql("Postgre", psycopg2.connect),
+        odbc=get_execute_sql("ODBC", odbc_connect),
+    )
     return function(sql_statement, info, query_params)
 
 
@@ -166,7 +191,7 @@ def _log_oracle_error(error, sql_query):
             sql_query[:offset].split("\n")[-1] + "█" + sql_query[offset:].split("\n")[0]
         )
         message = f"Line {line_no}: {line[:100]}"
-        get_run_logger().error(f"Oracle: Database error - {error}\n{message}")
+        get_run_logger().error("Oracle: Database error - %s\n%s", error, message)
 
 
 def _make_oracle_dsn(connection_info):
@@ -252,11 +277,13 @@ def oracle_sql_extract(
                 data = pd.DataFrame(rows, columns=columns)
                 count = len(data.index)
                 for column in lob_columns:
-                    get_run_logger().info(f"Reading data from LOB column {column}")
+                    get_run_logger().info("Reading data from LOB column %s", column)
                     data[column] = data[column].map(lambda x: x.read() if x else None)
                 size = sum(data.memory_usage())
 
-            get_run_logger().info(f"Oracle: Read {count} rows, {util.sizeof_fmt(size)}")
+            get_run_logger().info(
+                "Oracle: Read %s rows, %s", count, util.sizeof_fmt(size)
+            )
             if chunks_prefix:
                 return filenames
             return data
@@ -304,37 +331,47 @@ def oracle_insert(
             conn, cursor, host, pre_insert_statements, pre_insert_params
         )
 
-        get_run_logger().info(f"Oracle: Inserting into {table_identifier} on {host}")
-        # Insert records in batches
-        for start in range(0, len(records), batch_size):
-            to_insert = records[start : start + batch_size]
-            cursor.executemany(insert_sql, to_insert, batcherrors=True)
-            batch_errors = cursor.getbatcherrors()
-            for error in batch_errors[: 10 - errors]:
-                get_run_logger().error(
-                    f"Oracle: Database error {error.message} while inserting data "
-                    f"{to_insert[error.offset]}"
-                )
-            errors += len(batch_errors)
-        if records:
-            error_proportion = float(errors) / float(len(records))
-            if error_proportion > max_error_proportion:
-                get_run_logger().error(
-                    f"{error_proportion:.0%} of insert actions failed, exceeding the set maximum "
-                    f"({max_error_proportion:.0%}); rolling back transaction."
-                )
-                conn.rollback()
-            else:
-                conn.commit()
+        try:
+            get_run_logger().info(
+                "Oracle: Inserting into %s on %s", table_identifier, host
+            )
+            # Insert records in batches
+            for start in range(0, len(records), batch_size):
+                to_insert = records[start : start + batch_size]
+                cursor.executemany(insert_sql, to_insert, batcherrors=True)
+                batch_errors = cursor.getbatcherrors()
+                for error in batch_errors[: 10 - errors]:
+                    get_run_logger().error(
+                        "Oracle: Database error %s while inserting data %s",
+                        error.message,
+                        to_insert[error.offset],
+                    )
+                errors += len(batch_errors)
+            if records:
+                error_proportion = float(errors) / float(len(records))
+                if error_proportion > max_error_proportion:
+                    get_run_logger().error(
+                        "%s of insert actions failed, exceeding the set maximum (%s); rolling back "
+                        "transaction.",
+                        f"{error_proportion:.1%}",
+                        f"{max_error_proportion:.1%}",
+                    )
+                    conn.rollback()
+                else:
+                    conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
 
     # Logging
     if errors > 10:
         get_run_logger().error(
-            f"Oracle: {errors - 10} more database errors while inserting not shown"
+            "Oracle: %s more database errors while inserting not shown", errors - 10
         )
     get_run_logger().info(
-        f"Oracle: Inserted {len(records) - errors} rows, "
-        f"{util.sizeof_fmt(sum(dataframe.memory_usage()))}"
+        "Oracle: Inserted %s rows, %s",
+        len(records) - errors,
+        util.sizeof_fmt(sum(dataframe.memory_usage())),
     )
     if errors:
         raise RuntimeError(f"Failed to insert {errors} records")
@@ -383,37 +420,47 @@ def oracle_update(
             conn, cursor, host, pre_update_statements, pre_update_params
         )
 
-        get_run_logger().info(f"Oracle: Updating data in {table_identifier} on {host}")
-        # Update records in batches
-        for start in range(0, len(records), batch_size):
-            to_update = records[start : start + batch_size]
-            cursor.executemany(update_sql, to_update, batcherrors=True)
-            batch_errors = cursor.getbatcherrors()
-            for error in batch_errors[: 10 - errors]:
-                get_run_logger().error(
-                    f"Oracle: Database error {error.message} while updating data "
-                    f"{to_update[error.offset]}"
-                )
-            errors += len(batch_errors)
-        if records:
-            error_proportion = float(errors) / float(len(records))
-            if error_proportion > max_error_proportion:
-                get_run_logger().error(
-                    f"{error_proportion:.0%} of update actions failed, exceeding the set maximum "
-                    f"({max_error_proportion:.0%}); rolling back transaction."
-                )
-                conn.rollback()
-            else:
-                conn.commit()
+        try:
+            get_run_logger().info(
+                "Oracle: Updating data in %s on %s", table_identifier, host
+            )
+            # Update records in batches
+            for start in range(0, len(records), batch_size):
+                to_update = records[start : start + batch_size]
+                cursor.executemany(update_sql, to_update, batcherrors=True)
+                batch_errors = cursor.getbatcherrors()
+                for error in batch_errors[: 10 - errors]:
+                    get_run_logger().error(
+                        "Oracle: Database error %s while updating data %s",
+                        error.message,
+                        to_update[error.offset],
+                    )
+                errors += len(batch_errors)
+            if records:
+                error_proportion = float(errors) / float(len(records))
+                if error_proportion > max_error_proportion:
+                    get_run_logger().error(
+                        "%s of update actions failed, exceeding the set maximum (%s); rolling back "
+                        "transaction.",
+                        f"{error_proportion:.1%}",
+                        f"{max_error_proportion:.1%}",
+                    )
+                    conn.rollback()
+                else:
+                    conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
 
     # Logging
     if errors > 10:
         get_run_logger().error(
-            f"Oracle: {errors - 10} more database errors while updating not shown"
+            "Oracle: %s more database errors while updating not shown", errors - 10
         )
     get_run_logger().info(
-        f"Oracle: Updated {len(records) - errors} rows, "
-        f"{util.sizeof_fmt(sum(dataframe.memory_usage()))}"
+        "Oracle: Updated %s rows, %s",
+        len(records) - errors,
+        util.sizeof_fmt(sum(dataframe.memory_usage())),
     )
     if errors:
         raise RuntimeError(f"Failed to update {errors} records")
@@ -450,246 +497,340 @@ def _oracle_execute_statements(conn, cursor, host, statements, query_params=None
                 cursor.execute(sql, params)
             else:
                 cursor.execute(sql)
-    except cx_Oracle.DatabaseError as exc:
-        _log_oracle_error(exc, sql)
+    # pylint:disable=broad-except
+    except Exception as err:
+        if isinstance(err, cx_Oracle.DatabaseError):
+            _log_oracle_error(err, sql)
         conn.rollback()
         raise
 
 
 ##########
-# Postgre functions
+# Helper function for ODBC connections
 ##########
 
 
-def postgre_sql_extract(
-    sql_query: str,
-    connection_info: dict,
-    query_params=None,
-    lob_columns: list = None,
-    chunks_prefix: str = None,
-    chunksize: int = 1000,
-) -> pd.DataFrame:
-    """Postgre-specific implementation of the sql_extract task"""
-    # pylint:disable=too-many-statements
-    # pylint:disable=too-many-branches
-    # pylint:disable=too-many-locals
-    # pylint:disable=too-many-arguments
+def odbc_connect(**kwargs):
+    """Connects to an ODBC database, taking keyword arguments as elements of the connection string.
+    E.g. passing uid="myself" adds the element "UID=myself;" to the connection string.
+    """
 
-    if lob_columns:
-        raise ValueError(
-            "The lob_columns parameter is not supported for Postgre databases."
-        )
-    with psycopg2.connect(**connection_info) as conn:
-        host = connection_info["host"]
-        sql_snip = " ".join(sql_query.split())[:200] + " ..."
-        log_str = f"Postgre: Reading from {host}: {sql_snip}"
-        if query_params:
-            log_str += f"\nwith injected params: {query_params}"
-        get_run_logger().info(log_str)
+    # Passwords with special characters must be escaped
+    # See https://github.com/mkleehammer/pyodbc/issues/569#issuecomment-496234942
+    kwargs["pwd"] = "{" + kwargs["pwd"].replace("}", "}}") + "}"
+    connection_string = ";".join([f"{k.upper()}={v}" for k, v in kwargs.items()])
+    return pyodbc.connect(connection_string, timeout=60)
 
-        cursor = conn.cursor()
-        cursor.arraysize = chunksize
-        if query_params:
-            cursor.execute(sql_query, query_params)
-        else:
-            cursor.execute(sql_query)
-        columns = [i[0].lower() for i in cursor.description]
 
-        if chunks_prefix:
-            count = 0
-            size = 0
-            filenames = []
-            while True:
-                rows = cursor.fetchmany()
-                if not rows:
-                    break
+##########
+# Functions for all other supported database types
+##########
+
+
+def get_sql_extract(system_type, connection_func):
+    """Returns a sql_extract task implementation specific to the identified database system type"""
+
+    def do_sql_extract(
+        sql_query: str,
+        connection_info: dict,
+        query_params=None,
+        lob_columns: list = None,
+        chunks_prefix: str = None,
+        chunksize: int = 1000,
+    ) -> pd.DataFrame:
+        """System-specific implementation of the sql_extract task"""
+        # pylint:disable=too-many-statements
+        # pylint:disable=too-many-branches
+        # pylint:disable=too-many-locals
+        # pylint:disable=too-many-arguments
+
+        if lob_columns:
+            raise ValueError(
+                f"The lob_columns parameter is not supported for {system_type} databases."
+            )
+        with connection_func(**connection_info) as conn:
+            if system_type == "ODBC":
+                host = connection_info["server"]
+            else:
+                host = connection_info["host"]
+            sql_snip = " ".join(sql_query.split())[:200] + " ..."
+            log_str = f"{system_type}: Reading from {host}: {sql_snip}"
+            if query_params:
+                log_str += f"\nwith injected params: {query_params}"
+            get_run_logger().info(log_str)
+
+            cursor = conn.cursor()
+            cursor.arraysize = chunksize
+            if query_params:
+                cursor.execute(sql_query, query_params)
+            else:
+                cursor.execute(sql_query)
+            columns = [i[0].lower() for i in cursor.description]
+
+            if chunks_prefix:
+                count = 0
+                size = 0
+                filenames = []
+                while True:
+                    rows = cursor.fetchmany()
+                    if not rows:
+                        break
+                    data = pd.DataFrame(rows, columns=columns)
+                    count += len(data.index)
+                    size += sum(data.memory_usage())
+                    filename = f"{chunks_prefix}_{len(filenames)}"
+                    filenames.append(filename)
+                    data.to_pickle(filename)
+            else:
+                rows = cursor.fetchall()
                 data = pd.DataFrame(rows, columns=columns)
-                count += len(data.index)
-                size += sum(data.memory_usage())
-                filename = f"{chunks_prefix}_{len(filenames)}"
-                filenames.append(filename)
-                data.to_pickle(filename)
-        else:
-            rows = cursor.fetchall()
-            data = pd.DataFrame(rows, columns=columns)
-            count = len(data.index)
-            size = sum(data.memory_usage())
+                count = len(data.index)
+                size = sum(data.memory_usage())
 
-        get_run_logger().info(f"Postgre: Read {count} rows, {util.sizeof_fmt(size)}")
-        if chunks_prefix:
-            return filenames
-        return data
+            get_run_logger().info(
+                "%s: Read %s rows, %s", system_type, count, util.sizeof_fmt(size)
+            )
+            if chunks_prefix:
+                return filenames
+            return data
+
+    return do_sql_extract
 
 
-def postgre_insert(
-    dataframe: pd.DataFrame,
-    table_identifier: str,
-    connection_info: dict,
-    pre_insert_statements: list[str] = None,
-    pre_insert_params: list = None,
-    max_error_proportion: float = 0.05,
-) -> pd.DataFrame:
-    """Postgre-specific implementation of the insert task"""
-    # pylint:disable=too-many-locals
-    # pylint:disable=too-many-arguments
+def get_insert(system_type, connection_func):
+    """Returns an insert task implementation specific to the identified database system type"""
 
-    errors = 0
-    insert_sql = (
-        f'INSERT INTO {table_identifier} ({",".join(list(dataframe.columns))}) '
-        + f'VALUES ({",".join(":" + i for i in dataframe.columns)})'
-    )
-    if pre_insert_statements is None:
-        pre_insert_statements = []
+    def do_insert(
+        dataframe: pd.DataFrame,
+        table_identifier: str,
+        connection_info: dict,
+        pre_insert_statements: list[str] = None,
+        pre_insert_params: list = None,
+        max_error_proportion: float = 0.05,
+    ) -> pd.DataFrame:
+        """System-specific implementation of the insert task"""
+        # pylint:disable=too-many-locals
+        # pylint:disable=too-many-arguments
 
-    # Replace NA values with None and turn to list of dicts
-    records = [
-        {k: None if pd.isnull(v) else v for k, v in i.items()}
-        for i in dataframe.to_dict("records")
-    ]
-
-    with psycopg2.connect(**connection_info) as conn:
-        host = connection_info["host"]
-        cursor = conn.cursor()
-
-        _postgre_execute_statements(
-            cursor, host, pre_insert_statements, pre_insert_params
+        errors = 0
+        insert_sql = (
+            f'INSERT INTO {table_identifier} ({",".join(list(dataframe.columns))}) '
+            + f'VALUES ({",".join(":" + i for i in dataframe.columns)})'
         )
+        if pre_insert_statements is None:
+            pre_insert_statements = []
 
-        get_run_logger().info(f"Postgre: Inserting into {table_identifier} on {host}")
-        # Insert records individually
-        for to_insert in records:
-            try:
-                cursor.execute(insert_sql, to_insert)
-            # pylint:disable=broad-except
-            except Exception as err:
-                if errors < 10:
-                    get_run_logger().error(
-                        f"Postgre: Error while inserting data {to_insert}:\n{err}"
-                    )
-                errors += 1
-        if records:
-            error_proportion = float(errors) / float(len(records))
-            if error_proportion > max_error_proportion:
-                get_run_logger().error(
-                    f"{error_proportion:.0%} of insert actions failed, exceeding the set maximum "
-                    f"({max_error_proportion:.0%}); rolling back transaction."
-                )
-                conn.rollback()
+        # Replace NA values with None and turn to list of dicts
+        records = [
+            {k: None if pd.isnull(v) else v for k, v in i.items()}
+            for i in dataframe.to_dict("records")
+        ]
+
+        with connection_func(**connection_info) as conn:
+            if system_type == "ODBC":
+                host = connection_info["server"]
             else:
-                conn.commit()
+                host = connection_info["host"]
+            cursor = conn.cursor()
 
-    # Logging
-    if errors > 10:
-        get_run_logger().error(
-            f"Postgre: {errors - 10} more database errors while inserting not shown"
-        )
-    get_run_logger().info(
-        f"Postgre: Inserted {len(records) - errors} rows"
-        f"{util.sizeof_fmt(sum(dataframe.memory_usage()))}"
-    )
-    if errors:
-        raise RuntimeError(f"Failed to insert {errors} records")
+            _execute_statements(
+                system_type,
+                conn,
+                cursor,
+                host,
+                pre_insert_statements,
+                pre_insert_params,
+            )
 
-
-def postgre_update(
-    dataframe: pd.DataFrame,
-    table_identifier: str,
-    match_on: list,
-    connection_info: dict,
-    pre_update_statements: list[str] = None,
-    pre_update_params: list = None,
-    max_error_proportion: float = 0.05,
-) -> pd.DataFrame:
-    """Postgre-specific implementation of the update task"""
-    # pylint:disable=too-many-locals
-    # pylint:disable=too-many-arguments
-
-    errors = 0
-    set_columns = [i for i in dataframe.columns if i not in match_on]
-    set_list = [f"{i} = :{i}" for i in set_columns]
-    match_list = [f"{i} = :{i}" for i in match_on]
-    update_sql = (
-        f'UPDATE {table_identifier} SET {", ".join(set_list)} '
-        + f'WHERE {" AND ".join(match_list)}'
-    )
-    get_run_logger().info(update_sql)
-    if pre_update_statements is None:
-        pre_update_statements = []
-
-    # Replace NA values with None and turn to list of dicts
-    records = [
-        {k: None if pd.isnull(v) else v for k, v in i.items()}
-        for i in dataframe.to_dict("records")
-    ]
-
-    with psycopg2.connect(**connection_info) as conn:
-        host = connection_info["host"]
-        cursor = conn.cursor()
-
-        _postgre_execute_statements(
-            cursor, host, pre_update_statements, pre_update_params
-        )
-
-        get_run_logger().info(f"Postgre: Updating data in {table_identifier} on {host}")
-        # Update records individually
-        for to_update in records:
             try:
-                cursor.execute(update_sql, to_update)
-            # pylint:disable=broad-except
-            except Exception as err:
-                if errors < 10:
-                    get_run_logger().error(
-                        f"Postgre: Error while updating data {to_update}:\n{err}"
-                    )
-                errors += 1
-        if records:
-            error_proportion = float(errors) / float(len(records))
-            if error_proportion > max_error_proportion:
-                get_run_logger().error(
-                    f"{error_proportion:.0%} of update actions failed, exceeding the set maximum "
-                    f"({max_error_proportion:.0%}); rolling back transaction."
+                get_run_logger().info(
+                    "%s: Inserting into %s on %s", system_type, table_identifier, host
                 )
+                # Insert records individually
+                for to_insert in records:
+                    try:
+                        cursor.execute(insert_sql, to_insert)
+                    # pylint:disable=broad-except
+                    except Exception as err:
+                        if errors < 10:
+                            get_run_logger().error(
+                                "%s: Error while inserting data %s:\n%s",
+                                system_type,
+                                to_insert,
+                                err,
+                            )
+                        errors += 1
+                if records:
+                    error_proportion = float(errors) / float(len(records))
+                    if error_proportion > max_error_proportion:
+                        get_run_logger().error(
+                            "%s: %s of insert actions failed, exceeding the set maximum "
+                            "(%s); rolling back transaction.",
+                            system_type,
+                            f"{error_proportion:.1%}",
+                            f"{max_error_proportion:.1%}",
+                        )
+                        conn.rollback()
+                    else:
+                        conn.commit()
+            except Exception:
                 conn.rollback()
-            else:
-                conn.commit()
+                raise
 
-    # Logging
-    if errors > 10:
-        get_run_logger().error(
-            f"Postgre: {errors - 10} more database errors while updating not shown"
+        # Logging
+        if errors > 10:
+            get_run_logger().error(
+                "%s: %s more database errors while inserting not shown",
+                system_type,
+                errors - 10,
+            )
+        get_run_logger().info(
+            "%s: Inserted %s rows (%s)",
+            system_type,
+            len(records) - errors,
+            util.sizeof_fmt(sum(dataframe.memory_usage())),
         )
-    get_run_logger().info(
-        f"Postgre: Updated {len(records) - errors} rows"
-        f"{util.sizeof_fmt(sum(dataframe.memory_usage()))}"
-    )
-    if errors:
-        raise RuntimeError(f"Failed to update {errors} records")
+        if errors:
+            raise RuntimeError(f"Failed to insert {errors} records")
+
+    return do_insert
 
 
-def postgre_execute_sql(sql_statement, connection_info: dict, query_params=None):
-    """Postgre-specific implementation of the execute_sql task"""
+def get_update(system_type, connection_func):
+    """Returns an update task implementation spe3cific to the identified database system type"""
 
-    if isinstance(sql_statement, str):
-        sql_statement = [sql_statement]
-        query_params = [query_params]
+    def do_update(
+        dataframe: pd.DataFrame,
+        table_identifier: str,
+        match_on: list,
+        connection_info: dict,
+        pre_update_statements: list[str] = None,
+        pre_update_params: list = None,
+        max_error_proportion: float = 0.05,
+    ) -> pd.DataFrame:
+        """System-specific implementation of the update task"""
+        # pylint:disable=too-many-locals
+        # pylint:disable=too-many-arguments
 
-    with psycopg2.connect(**connection_info) as conn:
-        host = connection_info["host"]
-        cursor = conn.cursor()
-        _postgre_execute_statements(cursor, host, sql_statement, query_params)
-        conn.commit()
+        errors = 0
+        set_columns = [i for i in dataframe.columns if i not in match_on]
+        set_list = [f"{i} = :{i}" for i in set_columns]
+        match_list = [f"{i} = :{i}" for i in match_on]
+        update_sql = (
+            f'UPDATE {table_identifier} SET {", ".join(set_list)} '
+            + f'WHERE {" AND ".join(match_list)}'
+        )
+        if pre_update_statements is None:
+            pre_update_statements = []
+
+        # Replace NA values with None and turn to list of dicts
+        records = [
+            {k: None if pd.isnull(v) else v for k, v in i.items()}
+            for i in dataframe.to_dict("records")
+        ]
+
+        with connection_func(**connection_info) as conn:
+            if system_type == "ODBC":
+                host = connection_info["server"]
+            else:
+                host = connection_info["host"]
+            cursor = conn.cursor()
+
+            _execute_statements(
+                system_type, cursor, host, pre_update_statements, pre_update_params
+            )
+
+            try:
+                get_run_logger().info(
+                    "%s: Updating data in %s on %s", system_type, table_identifier, host
+                )
+                # Update records individually
+                for to_update in records:
+                    try:
+                        cursor.execute(update_sql, to_update)
+                    # pylint:disable=broad-except
+                    except Exception as err:
+                        if errors < 10:
+                            get_run_logger().error(
+                                "%s: Error while updating data %s:\n%s",
+                                system_type,
+                                to_update,
+                                err,
+                            )
+                        errors += 1
+                if records:
+                    error_proportion = float(errors) / float(len(records))
+                    if error_proportion > max_error_proportion:
+                        get_run_logger().error(
+                            "%s of update actions failed, exceeding the set maximum "
+                            "(%s); rolling back transaction.",
+                            f"{error_proportion:.1%}",
+                            f"{max_error_proportion:.1%}",
+                        )
+                        conn.rollback()
+                    else:
+                        conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+        # Logging
+        if errors > 10:
+            get_run_logger().error(
+                "%s: %s more database errors while updating not shown",
+                system_type,
+                errors - 10,
+            )
+        get_run_logger().info(
+            "%s: Updated %s rows (%s)",
+            system_type,
+            len(records) - errors,
+            util.sizeof_fmt(sum(dataframe.memory_usage())),
+        )
+        if errors:
+            raise RuntimeError(f"{system_type}: Failed to update {errors} records")
+
+    return do_update
 
 
-def _postgre_execute_statements(cursor, host, statements, query_params=None):
+def get_execute_sql(system_type, connection_func):
+    """Returns an execute_sql task implmementation specific to the identified database system
+    type"""
+
+    def do_execute_sql(sql_statement, connection_info: dict, query_params=None):
+        """System-specific implementation of the execute_sql task"""
+
+        if isinstance(sql_statement, str):
+            sql_statement = [sql_statement]
+            query_params = [query_params]
+
+        with connection_func(**connection_info) as conn:
+            if system_type == "ODBC":
+                host = connection_info["server"]
+            else:
+                host = connection_info["host"]
+            cursor = conn.cursor()
+            _execute_statements(system_type, cursor, host, sql_statement, query_params)
+            conn.commit()
+
+    return do_execute_sql
+
+
+def _execute_statements(system_type, conn, cursor, host, statements, query_params=None):
+    # pylint:disable=too-many-arguments
     if query_params is None:
         query_params = [None] * len(statements)
-    for sql, params in zip(statements, query_params):
-        sql_snip = " ".join(sql.split())[:200] + " ..."
-        log_str = f"Postgre: Executing on {host}: {sql_snip}"
-        if params:
-            log_str += f"\nwith injected params: {params}"
-        get_run_logger().info(log_str)
-        if params:
-            cursor.execute(sql, params)
-        else:
-            cursor.execute(sql)
+    try:
+        for sql, params in zip(statements, query_params):
+            sql_snip = " ".join(sql.split())[:200] + " ..."
+            log_str = f"{system_type}: Executing on {host}: {sql_snip}"
+            if params:
+                log_str += f"\nwith injected params: {params}"
+            get_run_logger().info(log_str)
+            if params:
+                cursor.execute(sql, params)
+            else:
+                cursor.execute(sql)
+    except Exception:
+        conn.rollback()
+        raise
