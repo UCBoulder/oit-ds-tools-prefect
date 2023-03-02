@@ -611,20 +611,33 @@ def get_insert(system_type, connection_func):
         """System-specific implementation of the insert task"""
         # pylint:disable=too-many-locals
         # pylint:disable=too-many-arguments
+        # pylint:disable=too-many-branches
 
         errors = 0
-        insert_sql = (
-            f'INSERT INTO {table_identifier} ({",".join(list(dataframe.columns))}) '
-            + f'VALUES ({",".join(":" + i for i in dataframe.columns)})'
-        )
         if pre_insert_statements is None:
             pre_insert_statements = []
 
-        # Replace NA values with None and turn to list of dicts
-        records = [
-            {k: None if pd.isnull(v) else v for k, v in i.items()}
-            for i in dataframe.to_dict("records")
-        ]
+        if system_type == "ODBC":
+            insert_sql = (
+                f'INSERT INTO {table_identifier} ({",".join(list(dataframe.columns))}) '
+                + f'VALUES ({",".join(["?"] * len(dataframe.columns))})'
+            )
+            # Replace NA values with None and turn to list of lists
+            records = [
+                [None if pd.isnull(j) else j for j in i]
+                for i in dataframe.values.tolist()
+            ]
+        elif system_type == "Postgre":
+            param_list = [f"%({i})s" for i in dataframe.columns]
+            insert_sql = (
+                f'INSERT INTO {table_identifier} ({",".join(list(dataframe.columns))}) '
+                + f'VALUES ({",".join(param_list)})'
+            )
+            # Replace NA values with None and turn to list of dicts
+            records = [
+                {k: None if pd.isnull(v) else v for k, v in i.items()}
+                for i in dataframe.to_dict("records")
+            ]
 
         with connection_func(**connection_info) as conn:
             if system_type == "ODBC":
@@ -711,23 +724,39 @@ def get_update(system_type, connection_func):
         """System-specific implementation of the update task"""
         # pylint:disable=too-many-locals
         # pylint:disable=too-many-arguments
+        # pylint:disable=too-many-branches
 
-        errors = 0
         set_columns = [i for i in dataframe.columns if i not in match_on]
-        set_list = [f"{i} = :{i}" for i in set_columns]
-        match_list = [f"{i} = :{i}" for i in match_on]
+        if system_type == "ODBC":
+            set_list = [f"{i} = ?" for i in set_columns]
+            match_list = [f"{i} = ?" for i in match_on]
+            # Replace NA values with None and turn to list of lists
+            set_values = [
+                [None if pd.isnull(j) else j for j in i]
+                for i in dataframe[set_columns].values.tolist()
+            ]
+            match_values = [
+                [None if pd.isnull(j) else j for j in i]
+                for i in dataframe[match_on].values.tolist()
+            ]
+            # Combine lists from each group so they will insert into the update statement
+            records = [l + r for l, r in zip(set_values, match_values)]
+        elif system_type == "Postgre":
+            set_list = [f"{i} = %({i})s" for i in set_columns]
+            match_list = [f"{i} = %({i})s" for i in match_on]
+            # Replace NA values with None and turn to list of dicts
+            records = [
+                {k: None if pd.isnull(v) else v for k, v in i.items()}
+                for i in dataframe.to_dict("records")
+            ]
         update_sql = (
             f'UPDATE {table_identifier} SET {", ".join(set_list)} '
             + f'WHERE {" AND ".join(match_list)}'
         )
+
+        errors = 0
         if pre_update_statements is None:
             pre_update_statements = []
-
-        # Replace NA values with None and turn to list of dicts
-        records = [
-            {k: None if pd.isnull(v) else v for k, v in i.items()}
-            for i in dataframe.to_dict("records")
-        ]
 
         with connection_func(**connection_info) as conn:
             if system_type == "ODBC":
