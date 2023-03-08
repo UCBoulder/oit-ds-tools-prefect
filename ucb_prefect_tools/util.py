@@ -224,6 +224,7 @@ def _deploy(flow_filename, flow_function_name, options):
             infrastructure=docker,
             storage=storage,
             apply=True,
+            path="/",
         )
         print(f"Deployed {deployment.name} using docker image {image_uri}")
 
