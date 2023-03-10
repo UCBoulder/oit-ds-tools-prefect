@@ -575,7 +575,7 @@ def get_sql_extract(system_type, connection_func):
                     rows = cursor.fetchmany()
                     if not rows:
                         break
-                    data = pd.DataFrame(rows, columns=columns)
+                    data = pd.DataFrame([list(i) for i in rows], columns=columns)
                     count += len(data.index)
                     size += sum(data.memory_usage())
                     filename = f"{chunks_prefix}_{len(filenames)}"
@@ -583,7 +583,7 @@ def get_sql_extract(system_type, connection_func):
                     data.to_pickle(filename)
             else:
                 rows = cursor.fetchall()
-                data = pd.DataFrame(rows, columns=columns)
+                data = pd.DataFrame([list(i) for i in rows], columns=columns)
                 count = len(data.index)
                 size = sum(data.memory_usage())
 
