@@ -613,10 +613,6 @@ def get_insert(system_type, connection_func):
         # pylint:disable=too-many-arguments
         # pylint:disable=too-many-branches
 
-        errors = 0
-        if pre_insert_statements is None:
-            pre_insert_statements = []
-
         if system_type == "ODBC":
             insert_sql = (
                 f'INSERT INTO {table_identifier} ({",".join(list(dataframe.columns))}) '
@@ -638,6 +634,10 @@ def get_insert(system_type, connection_func):
                 {k: None if pd.isnull(v) else v for k, v in i.items()}
                 for i in dataframe.to_dict("records")
             ]
+
+        errors = 0
+        if pre_insert_statements is None:
+            pre_insert_statements = []
 
         with connection_func(**connection_info) as conn:
             if system_type == "ODBC":
@@ -766,7 +766,7 @@ def get_update(system_type, connection_func):
             cursor = conn.cursor()
 
             _execute_statements(
-                system_type, cursor, host, pre_update_statements, pre_update_params
+                system_type, conn, cursor, host, pre_update_statements, pre_update_params
             )
 
             try:
@@ -839,7 +839,7 @@ def get_execute_sql(system_type, connection_func):
             else:
                 host = connection_info["host"]
             cursor = conn.cursor()
-            _execute_statements(system_type, cursor, host, sql_statement, query_params)
+            _execute_statements(system_type, conn, cursor, host, sql_statement, query_params)
             conn.commit()
 
     return do_execute_sql
