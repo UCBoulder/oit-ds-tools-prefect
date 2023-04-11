@@ -14,12 +14,12 @@ import asyncio
 import uuid
 
 from prefect import task, get_run_logger, tags, context
-from prefect.utilities.filesystem import set_default_ignore_file
+from prefect.utilities.filesystem import create_default_ignore_file
 from prefect.deployments import Deployment
 from prefect.filesystems import RemoteFileSystem
 from prefect.blocks.system import Secret, JSON
 from prefect.infrastructure.docker import DockerContainer
-from prefect.client import get_client
+from prefect.client.orchestration import get_client
 import git
 import pytz
 
@@ -143,7 +143,7 @@ def _deploy(flow_filename, flow_function_name, options):
             docker_label = options[1]
         else:
             raise ValueError(f"Unrecognized option: {options[0]}")
-    if set_default_ignore_file(LOCAL_FLOW_FOLDER):
+    if create_default_ignore_file(LOCAL_FLOW_FOLDER):
         print("Created default .prefectignore file")
     flow_filename = os.path.basename(flow_filename)
     if not os.path.exists(os.path.join(LOCAL_FLOW_FOLDER, flow_filename)):
