@@ -139,7 +139,7 @@ def _deploy(flow_filename, flow_function_name, options):
 
     # Parse options and check file locations
     parser = argparse.ArgumentParser()
-    parser.add_argument("--image-name", type=str, default="default")
+    parser.add_argument("--image-name", type=str, default="oit-ds-prefect-default")
     parser.add_argument("--image-branch", type=str, default="main")
     args = parser.parse_args(options)
     if create_default_ignore_file(LOCAL_FLOW_FOLDER):
