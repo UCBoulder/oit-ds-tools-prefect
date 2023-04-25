@@ -1,5 +1,6 @@
 """General utility functions to make flows easier to implement with Prefect Cloud"""
 
+import argparse
 import importlib
 from datetime import datetime
 import os
@@ -137,12 +138,10 @@ def _deploy(flow_filename, flow_function_name, options):
     # pylint:disable=too-many-statements
 
     # Parse options and check file locations
-    docker_label = "main"
-    if options:
-        if options[0] == "--docker-label":
-            docker_label = options[1]
-        else:
-            raise ValueError(f"Unrecognized option: {options[0]}")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--image-name", type=str, default="default")
+    parser.add_argument("--image-branch", type=str, default="main")
+    args = parser.parse_args(options)
     if create_default_ignore_file(LOCAL_FLOW_FOLDER):
         print("Created default .prefectignore file")
     flow_filename = os.path.basename(flow_filename)
@@ -189,7 +188,7 @@ def _deploy(flow_filename, flow_function_name, options):
             flow_function = getattr(module, flow_function_name)
 
         # Create docker infrastructure
-        image_uri = f"{DOCKER_REGISTRY}/{repo_name}:{docker_label}"
+        image_uri = f"{DOCKER_REGISTRY}/{args.image_name}:{args.image_branch}"
         docker = DockerContainer(
             image=image_uri,
             image_pull_policy="ALWAYS",

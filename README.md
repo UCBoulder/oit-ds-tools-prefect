@@ -8,10 +8,14 @@ Install the latest version with pip from the repo: `oit_ds_prefect_tools @ git+h
 
 You can also add `@tag` to get a specific version
 
-## Deployment to Prefect Flows
+## Usage
 
-To update the version of Prefect Tools used in the docker images of one or more Prefect flow repos (or the version of any Python package for that matter), all you have to do is rebuild the image without using the docker cache: assuming you import this package without a specific version number, rebuilding the image from scratch will result in pulling the latest version of the package.
+To deploy a flow, after installing this package on your work station, run: `python3 flows/my_flow.py deploy`. This will deploy the flow using the `oit-ds-prefect-default:main` image.
 
-To do this, simply use the [Image Builder Repo](https://github.com/UCBoulder/oit-ds-tools-image-builder)
+Deployment images can be built using the https://github.com/UCBoulder/oit-ds-tools-prefect-images repo.
 
-If you rebuild a lot of images, you may want to run `docker system prune -a` on the agent machine to ensure storage is freed up.
+To deploy a flow using a dev version of the default image which you have created on `my-branch` of the prefect-images repo, do this: `python3 flows/my_flow.py deploy --image-branch my-branch`.
+
+To deploy a flow using an image not named `oit-ds-prefect-default`, do this: `python3 flows/my_flow deploy --image-name oit-ds-prefect-my-image`
+
+You can also combine both options if you want to test a dev version of a non-default image.
