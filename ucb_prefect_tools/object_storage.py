@@ -61,7 +61,7 @@ def _switch(connection_info, **kwargs):
     raise ValueError(f'System type "{connection_info["system_type"]}" is not supported')
 
 
-@task(name="object_storage.get")
+@task(name="object_storage.get", retries=3, retry_delay_seconds=10 * 60)
 def get(object_name: str, connection_info: dict) -> bytes:
     """Returns the bytes content for the given file/object on the identified system. Raises
     FileNotFoundError if the file could not be found."""
@@ -71,7 +71,7 @@ def get(object_name: str, connection_info: dict) -> bytes:
     return function(object_name, info)
 
 
-@task(name="object_storage.put")
+@task(name="object_storage.put", retries=3, retry_delay_seconds=10 * 60)
 def put(
     binary_object: Union[BinaryIO, bytes], object_name: str, connection_info: dict
 ) -> None:
@@ -86,7 +86,7 @@ def put(
     function(binary_object, object_name, info)
 
 
-@task(name="object_storage.remove")
+@task(name="object_storage.remove", retries=3, retry_delay_seconds=10 * 60)
 def remove(object_name: str, connection_info: dict) -> None:
     """Removes the identified file/object."""
 
@@ -97,7 +97,7 @@ def remove(object_name: str, connection_info: dict) -> None:
     function(object_name, info)
 
 
-@task(name="object_storage.list_names")
+@task(name="object_storage.list_names", retries=3, retry_delay_seconds=10 * 60)
 def list_names(connection_info: dict, prefix: str = None) -> list[str]:
     """Returns a list of object or file names in the given folder. Filters by object name prefix,
     which includes directory path for file systems. Folders are not included; non-recursive."""
@@ -109,7 +109,7 @@ def list_names(connection_info: dict, prefix: str = None) -> list[str]:
     return function(info)
 
 
-@task(name="object_storage.store_dataframe")
+@task(name="object_storage.store_dataframe", retries=3, retry_delay_seconds=10 * 60)
 def store_dataframe(
     dataframe: pd.DataFrame, object_name: str, connection_info: dict
 ) -> None:
@@ -130,7 +130,7 @@ def store_dataframe(
     function(data, object_name, info)
 
 
-@task(name="object_storage.retrieve_dataframe")
+@task(name="object_storage.retrieve_dataframe", retries=3, retry_delay_seconds=10 * 60)
 def retrieve_dataframe(object_name: str, connection_info: dict) -> pd.DataFrame:
     """Writes the given dataframe to the identified storage system. The storage method and format
     should be considered opaque; reading the data should only be done with retrieve_dataframe.

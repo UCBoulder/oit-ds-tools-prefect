@@ -27,7 +27,7 @@ from . import util
 # System-agnostic tasks
 
 
-@task(name="database.sql_extract")
+@task(name="database.sql_extract", retries=3, retry_delay_seconds=10 * 60)
 def sql_extract(
     sql_query: str,
     connection_info: dict,
@@ -108,7 +108,7 @@ def insert(
     )
 
 
-@task(name="database.update")
+@task(name="database.update", retries=3, retry_delay_seconds=10 * 60)
 def update(
     dataframe: pd.DataFrame,
     table_identifier: str,
@@ -766,7 +766,12 @@ def get_update(system_type, connection_func):
             cursor = conn.cursor()
 
             _execute_statements(
-                system_type, conn, cursor, host, pre_update_statements, pre_update_params
+                system_type,
+                conn,
+                cursor,
+                host,
+                pre_update_statements,
+                pre_update_params,
             )
 
             try:
@@ -839,7 +844,9 @@ def get_execute_sql(system_type, connection_func):
             else:
                 host = connection_info["host"]
             cursor = conn.cursor()
-            _execute_statements(system_type, conn, cursor, host, sql_statement, query_params)
+            _execute_statements(
+                system_type, conn, cursor, host, sql_statement, query_params
+            )
             conn.commit()
 
     return do_execute_sql
