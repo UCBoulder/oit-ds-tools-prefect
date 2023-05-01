@@ -19,7 +19,7 @@ from prefect.utilities.filesystem import create_default_ignore_file
 from prefect.deployments import Deployment
 from prefect.filesystems import RemoteFileSystem
 from prefect.blocks.system import Secret, JSON
-from prefect.infrastructure.docker import DockerContainer
+from prefect.infrastructure import KubernetesJob
 from prefect.client.orchestration import get_client
 import git
 import pytz
@@ -169,10 +169,10 @@ def _deploy(flow_filename, flow_function_name, options):
                 "Commit or discard changes to continue."
             )
         label = "main"
-        storage_path = f"main/{repo_name}"
+        storage_path = f"main/{repo_name}/"
     else:
-        label = "dev"
-        storage_path = f"dev/{repo_name}/{branch_name}"
+        label = "kubernetes"
+        storage_path = f"dev/{repo_name}/{branch_name}/"
 
     # Change into the flows folder and change back when done
     cwd = os.getcwd()
@@ -187,12 +187,24 @@ def _deploy(flow_filename, flow_function_name, options):
             module = importlib.import_module(module_name)
             flow_function = getattr(module, flow_function_name)
 
-        # Create docker infrastructure
+        # Create Kubernetes infrastructure
         image_uri = f"{DOCKER_REGISTRY}/{args.image_name}:{args.image_branch}"
-        docker = DockerContainer(
+        k8s_job = KubernetesJob(
             image=image_uri,
-            image_pull_policy="ALWAYS",
-            auto_remove=True,
+            image_pull_policy="Always",
+            namespace="oit-eds-etl-test",
+            customizations=[
+                {
+                    "op": "add",
+                    "path": "/spec/template/spec/imagePullSecrets",
+                    "value": [],
+                },
+                {
+                    "op": "add",
+                    "path": "/spec/template/spec/imagePullSecrets/0",
+                    "value": {"name": "artifactory-secret"},
+                },
+            ],
         )
 
         # Create flow storage infrastructure
@@ -202,7 +214,7 @@ def _deploy(flow_filename, flow_function_name, options):
             if not endpoint_url.startswith("https://"):
                 endpoint_url = "https://" + endpoint_url
             storage = RemoteFileSystem(
-                basepath=f's3://{storage_conn["bucket"]}/{storage_path}',
+                basepath=f's3://{storage_conn["bucket"]}/',
                 settings={
                     "key": storage_conn["access_key"],
                     "secret": storage_conn["secret_key"],
@@ -220,10 +232,10 @@ def _deploy(flow_filename, flow_function_name, options):
             name=f"{repo_short_name} | {branch_name} | {module_name}",
             tags=[label],
             work_queue_name=label,
-            infrastructure=docker,
+            infrastructure=k8s_job,
             storage=storage,
             apply=True,
-            path="/",
+            path=storage_path,
         )
         print(f"Deployed {deployment.name} using docker image {image_uri}")
 
