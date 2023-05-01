@@ -24,6 +24,10 @@ from prefect.client.orchestration import get_client
 import git
 import pytz
 
+# pylint:disable=unused-import
+# Import docker here as a workaround for https://github.com/PrefectHQ/prefect/issues/6519
+import docker
+
 # Overrideable settings related to deployments
 DOCKER_REGISTRY = "oit-data-services-docker-local.artifactory.colorado.edu"
 LOCAL_FLOW_FOLDER = "flows"
@@ -189,7 +193,7 @@ def _deploy(flow_filename, flow_function_name, options):
 
         # Create docker infrastructure
         image_uri = f"{DOCKER_REGISTRY}/{args.image_name}:{args.image_branch}"
-        docker = DockerContainer(
+        docker_container = DockerContainer(
             image=image_uri,
             image_pull_policy="ALWAYS",
             auto_remove=True,
@@ -220,7 +224,7 @@ def _deploy(flow_filename, flow_function_name, options):
             name=f"{repo_short_name} | {branch_name} | {module_name}",
             tags=[label],
             work_queue_name=label,
-            infrastructure=docker,
+            infrastructure=docker_container,
             storage=storage,
             apply=True,
             path="/",
