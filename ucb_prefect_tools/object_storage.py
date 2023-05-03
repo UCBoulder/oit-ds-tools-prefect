@@ -100,7 +100,8 @@ def remove(object_name: str, connection_info: dict) -> None:
 @task(name="object_storage.list_names", retries=3, retry_delay_seconds=10 * 60)
 def list_names(connection_info: dict, prefix: str = None) -> list[str]:
     """Returns a list of object or file names in the given folder. Filters by object name prefix,
-    which includes directory path for file systems. Folders are not included; non-recursive."""
+    which includes directory path for file systems. Folders are not included; non-recursive.
+    """
 
     info = connection_info.copy()
     function = _switch(info, sftp=sftp_list, minio=minio_list, s3=s3_list, smb=smb_list)
@@ -211,7 +212,7 @@ def _sftp_chdir(sftp, remote_directory):
     except IOError:
         dirname, basename = os.path.split(remote_directory.rstrip("/"))
         _sftp_chdir(sftp, dirname)  # make parent directories
-        
+
         try:
             sftp.mkdir(basename)  # sub-directory missing, so created it
         except OSError:
@@ -298,6 +299,18 @@ def sftp_remove(file_path: str, connection_info: dict) -> None:
     _load_known_hosts(ssh, connection_info)
     with _sftp_connection(ssh, connection_info) as sftp:
         sftp.remove(file_path)
+
+
+def sftp_rmdir(dir_path: str, connection_info: dict) -> None:
+    """Removes a directory if it exists.
+    dir_path must exist and be empty, otherwise an error will be raised.
+    """
+
+    _make_ssh_key(connection_info)
+    ssh = SSHClient()
+    _load_known_hosts(ssh, connection_info)
+    with _sftp_connection(ssh, connection_info) as sftp:
+        sftp.rmdir(dir_path)
 
 
 def sftp_list(connection_info: dict, file_prefix: str = "./") -> list[str]:
@@ -487,7 +500,8 @@ def s3_put(
 
 def s3_remove(object_key: str, connection_info: dict, VersionId: str = None) -> None:
     """Removes the identified object from an Amazon S3 bucket. The optional VersionId parameter
-    is passed to the delete method if provided (otherwise, the null version is deleted."""
+    is passed to the delete method if provided (otherwise, the null version is deleted.
+    """
 
     # pylint:disable=invalid-name
     bucket = connection_info["bucket"]
