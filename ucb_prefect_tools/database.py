@@ -7,6 +7,7 @@ supported system:
     - "postgre" for psycopg2.connect
     - "odbc" for odbc_connect (see below), a helper function that turns keyword args into an odbc
         connection string
+    - "mysql" for mysql.connector.connect
 
 The remaining KVs of connection_info should map directly to the keyword arguments used in calling
 the constructor indicated in the list above, with some exceptions:
