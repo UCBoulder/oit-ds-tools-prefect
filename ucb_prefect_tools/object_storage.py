@@ -207,6 +207,7 @@ def _sftp_chdir(sftp, remote_directory):
     if remote_directory == "":
         # top-level relative directory must exist
         return
+
     try:
         sftp.chdir(remote_directory)  # sub-directory exists
     except IOError:
@@ -214,11 +215,15 @@ def _sftp_chdir(sftp, remote_directory):
 
         try:
             _sftp_chdir(sftp, dirname)  # make parent directories
+        except OSError:
+            pass
+
+        try:
             sftp.mkdir(basename)  # sub-directory missing, so created it
         except OSError:
             pass
-        finally:
-            sftp.chdir(basename)
+
+        sftp.chdir(basename)
 
 
 @contextmanager
