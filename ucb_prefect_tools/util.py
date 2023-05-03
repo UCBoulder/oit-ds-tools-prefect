@@ -192,6 +192,7 @@ def _deploy(flow_filename, flow_function_name, options):
         k8s_job = KubernetesJob(
             image=image_uri,
             image_pull_policy="Always",
+            finished_job_ttl=120,
             namespace="oit-eds-etl-test",
             customizations=[
                 {
@@ -203,6 +204,16 @@ def _deploy(flow_filename, flow_function_name, options):
                     "op": "add",
                     "path": "/spec/template/spec/imagePullSecrets/0",
                     "value": {"name": "artifactory-secret"},
+                },
+                {
+                    "op": "add",
+                    "path": "/spec/template/spec/containers/0/securityContext",
+                    "value": {"runAsUser": 1001040000},
+                },
+                {
+                    "op": "add",
+                    "path": "/spec/template/spec/securityContext",
+                    "value": {"fsGroup": 1001040000},
                 },
             ],
         )
