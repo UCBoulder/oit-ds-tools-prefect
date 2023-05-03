@@ -211,8 +211,13 @@ def _sftp_chdir(sftp, remote_directory):
     except IOError:
         dirname, basename = os.path.split(remote_directory.rstrip("/"))
         _sftp_chdir(sftp, dirname)  # make parent directories
-        sftp.mkdir(basename)  # sub-directory missing, so created it
-        sftp.chdir(basename)
+        
+        try:
+            sftp.mkdir(basename)  # sub-directory missing, so created it
+        except OSError:
+            pass
+        finally:
+            sftp.chdir(basename)
 
 
 @contextmanager
