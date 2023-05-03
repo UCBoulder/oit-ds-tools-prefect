@@ -211,9 +211,9 @@ def _sftp_chdir(sftp, remote_directory):
         sftp.chdir(remote_directory)  # sub-directory exists
     except IOError:
         dirname, basename = os.path.split(remote_directory.rstrip("/"))
-        _sftp_chdir(sftp, dirname)  # make parent directories
 
         try:
+            _sftp_chdir(sftp, dirname)  # make parent directories
             sftp.mkdir(basename)  # sub-directory missing, so created it
         except OSError:
             pass
@@ -299,18 +299,6 @@ def sftp_remove(file_path: str, connection_info: dict) -> None:
     _load_known_hosts(ssh, connection_info)
     with _sftp_connection(ssh, connection_info) as sftp:
         sftp.remove(file_path)
-
-
-def sftp_rmdir(dir_path: str, connection_info: dict) -> None:
-    """Removes a directory if it exists.
-    dir_path must exist and be empty, otherwise an error will be raised.
-    """
-
-    _make_ssh_key(connection_info)
-    ssh = SSHClient()
-    _load_known_hosts(ssh, connection_info)
-    with _sftp_connection(ssh, connection_info) as sftp:
-        sftp.rmdir(dir_path)
 
 
 def sftp_list(connection_info: dict, file_prefix: str = "./") -> list[str]:
