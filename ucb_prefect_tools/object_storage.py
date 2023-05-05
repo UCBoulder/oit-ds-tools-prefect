@@ -100,7 +100,8 @@ def remove(object_name: str, connection_info: dict) -> None:
 @task(name="object_storage.list_names", retries=3, retry_delay_seconds=10 * 60)
 def list_names(connection_info: dict, prefix: str = None) -> list[str]:
     """Returns a list of object or file names in the given folder. Filters by object name prefix,
-    which includes directory path for file systems. Folders are not included; non-recursive."""
+    which includes directory path for file systems. Folders are not included; non-recursive.
+    """
 
     info = connection_info.copy()
     function = _switch(info, sftp=sftp_list, minio=minio_list, s3=s3_list, smb=smb_list)
@@ -206,12 +207,19 @@ def _sftp_chdir(sftp, remote_directory):
     if remote_directory == "":
         # top-level relative directory must exist
         return
+
     try:
         sftp.chdir(remote_directory)  # sub-directory exists
     except IOError:
         dirname, basename = os.path.split(remote_directory.rstrip("/"))
+
         _sftp_chdir(sftp, dirname)  # make parent directories
-        sftp.mkdir(basename)  # sub-directory missing, so created it
+
+        try:
+            sftp.mkdir(basename)  # sub-directory missing, so created it
+        except OSError:
+            pass
+
         sftp.chdir(basename)
 
 
@@ -482,7 +490,8 @@ def s3_put(
 
 def s3_remove(object_key: str, connection_info: dict, VersionId: str = None) -> None:
     """Removes the identified object from an Amazon S3 bucket. The optional VersionId parameter
-    is passed to the delete method if provided (otherwise, the null version is deleted."""
+    is passed to the delete method if provided (otherwise, the null version is deleted.
+    """
 
     # pylint:disable=invalid-name
     bucket = connection_info["bucket"]
