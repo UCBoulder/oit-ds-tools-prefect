@@ -3,7 +3,7 @@
 Each Prefect task takes a connection_info argument which is a dict identifying the system to
 connect to. It should always have a "system_type" member identifying one of the following
 supported system:
-    - "oracle" for cx_Oracle.connect
+    - "oracle" for oracledb.connect
     - "postgre" for psycopg2.connect
     - "odbc" for odbc_connect (see below), a helper function that turns keyword args into an odbc
         connection string
@@ -16,7 +16,7 @@ the constructor indicated in the list above, with some exceptions:
 
 # pylint:disable=broad-except
 
-import cx_Oracle
+import oracledb
 import psycopg2
 import pyodbc
 from prefect import task, get_run_logger
@@ -201,7 +201,7 @@ def _make_oracle_dsn(connection_info):
             del connection_info["port"]
         else:
             port = 1521
-        dsn = cx_Oracle.makedsn(connection_info["host"], port, connection_info["sid"])
+        dsn = oracledb.makedsn(connection_info["host"], port, connection_info["sid"])
         connection_info["dsn"] = dsn
         del connection_info["host"]
         del connection_info["sid"]
@@ -237,7 +237,7 @@ def oracle_sql_extract(
     _make_oracle_dsn(connection_info)
     if "encoding" not in connection_info:
         connection_info["encoding"] = "UTF-8"
-    with cx_Oracle.connect(**connection_info) as conn:
+    with oracledb.connect(**connection_info) as conn:
         host = _oracle_host(conn.dsn)
         sql_snip = " ".join(sql_query.split())[:200] + " ..."
         log_str = f"Oracle: Reading from {host}: {sql_snip}"
@@ -288,7 +288,7 @@ def oracle_sql_extract(
                 return filenames
             return data
 
-        except cx_Oracle.DatabaseError as exc:
+        except oracledb.DatabaseError as exc:
             _log_oracle_error(exc, sql_query)
             raise
 
@@ -323,7 +323,7 @@ def oracle_insert(
         for i in dataframe.to_dict("records")
     ]
 
-    with cx_Oracle.connect(**connection_info) as conn:
+    with oracledb.connect(**connection_info) as conn:
         host = _oracle_host(conn.dsn)
         cursor = conn.cursor()
 
@@ -412,7 +412,7 @@ def oracle_update(
         for i in dataframe.to_dict("records")
     ]
 
-    with cx_Oracle.connect(**connection_info) as conn:
+    with oracledb.connect(**connection_info) as conn:
         host = _oracle_host(conn.dsn)
         cursor = conn.cursor()
 
@@ -476,7 +476,7 @@ def oracle_execute_sql(sql_statement, connection_info: dict, query_params=None):
         sql_statement = [sql_statement]
         query_params = [query_params]
 
-    with cx_Oracle.connect(**connection_info) as conn:
+    with oracledb.connect(**connection_info) as conn:
         host = _oracle_host(conn.dsn)
         cursor = conn.cursor()
         _oracle_execute_statements(conn, cursor, host, sql_statement, query_params)
@@ -499,7 +499,7 @@ def _oracle_execute_statements(conn, cursor, host, statements, query_params=None
                 cursor.execute(sql)
     # pylint:disable=broad-except
     except Exception as err:
-        if isinstance(err, cx_Oracle.DatabaseError):
+        if isinstance(err, oracledb.DatabaseError):
             _log_oracle_error(err, sql)
         conn.rollback()
         raise
