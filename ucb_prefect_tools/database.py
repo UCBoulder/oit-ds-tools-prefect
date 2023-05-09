@@ -195,7 +195,10 @@ def _log_oracle_error(error, sql_query):
 
 
 def _prepare_oracle_connection(connection_info):
+    # Enable "thick mode" for oracle db, which is required for CIW
+    # See: https://github.com/oracle/python-oracledb/discussions/170
     oracledb.init_oracle_client()
+    # If an sid is used, a dsn needs to be constructed to support this
     if "sid" in connection_info:
         if "port" in connection_info:
             port = connection_info["port"]
