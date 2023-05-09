@@ -194,7 +194,8 @@ def _log_oracle_error(error, sql_query):
         get_run_logger().error("Oracle: Database error - %s\n%s", error, message)
 
 
-def _make_oracle_dsn(connection_info):
+def _prepare_oracle_connection(connection_info):
+    oracledb.init_oracle_client()
     if "sid" in connection_info:
         if "port" in connection_info:
             port = connection_info["port"]
@@ -234,7 +235,7 @@ def oracle_sql_extract(
         lob_columns = []
     else:
         lob_columns = [i.lower() for i in lob_columns]
-    _make_oracle_dsn(connection_info)
+    _prepare_oracle_connection(connection_info)
     if "encoding" not in connection_info:
         connection_info["encoding"] = "UTF-8"
     with oracledb.connect(**connection_info) as conn:
@@ -311,7 +312,7 @@ def oracle_insert(
         f'INSERT INTO {table_identifier} ({",".join(list(dataframe.columns))}) '
         + f'VALUES ({",".join(":" + i for i in dataframe.columns)})'
     )
-    _make_oracle_dsn(connection_info)
+    _prepare_oracle_connection(connection_info)
     if "encoding" not in connection_info:
         connection_info["encoding"] = "UTF-8"
     if pre_insert_statements is None:
@@ -400,7 +401,7 @@ def oracle_update(
         + f'WHERE {" AND ".join(match_list)}'
     )
     get_run_logger().info(update_sql)
-    _make_oracle_dsn(connection_info)
+    _prepare_oracle_connection(connection_info)
     if "encoding" not in connection_info:
         connection_info["encoding"] = "UTF-8"
     if pre_update_statements is None:
@@ -469,7 +470,7 @@ def oracle_update(
 def oracle_execute_sql(sql_statement, connection_info: dict, query_params=None):
     """Oracle-specific implementation of the execute_sql task"""
 
-    _make_oracle_dsn(connection_info)
+    _prepare_oracle_connection(connection_info)
     if "encoding" not in connection_info:
         connection_info["encoding"] = "UTF-8"
     if isinstance(sql_statement, str):
