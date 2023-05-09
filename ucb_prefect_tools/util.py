@@ -171,7 +171,7 @@ def _deploy(flow_filename, flow_function_name, options):
         label = "main"
         storage_path = f"main/{repo_name}/"
     else:
-        label = "kubernetes"
+        label = "dev"
         storage_path = f"dev/{repo_name}/{branch_name}/"
 
     # Change into the flows folder and change back when done
@@ -193,7 +193,7 @@ def _deploy(flow_filename, flow_function_name, options):
             image=image_uri,
             image_pull_policy="Always",
             finished_job_ttl=120,
-            namespace="oit-eds-etl-test",
+            namespace=f"oit-eds-prefect-{label}",
             customizations=[
                 {
                     "op": "add",
@@ -243,6 +243,7 @@ def _deploy(flow_filename, flow_function_name, options):
             name=f"{repo_short_name} | {branch_name} | {module_name}",
             tags=[label],
             work_queue_name=label,
+            work_pool_name="open-shift",
             infrastructure=k8s_job,
             storage=storage,
             apply=True,

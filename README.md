@@ -16,7 +16,7 @@ To deploy a flow this way, you must have Git and Docker installed and you must b
 
 Within the Git repo, the `./flows` folder should contain flow definitions, with one Python file per flow. This folder can also contain additional files to be referenced by your flows, such as SQL files for longer queries. When any flow is deployed, this entire folder is copied into the flow storage for that deployment, minus anything excluded by the `.prefectignore` file.
 
-Deployments created this way use Docker infrastructure and the flow storage defined by the `ds-flow-storage` JSON block in Prefect Cloud. The Docker registry, flow storage block name, and other settings can be overridden after importing the util package.
+Deployments created this way use KubernetesJob infrastructure and the flow storage defined by the `ds-flow-storage` JSON block in Prefect Cloud. The Docker registry, flow storage block name, and other settings can be overridden after importing the util package.
 
 ## Images for deployed flows
 
