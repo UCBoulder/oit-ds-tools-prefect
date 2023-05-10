@@ -194,6 +194,7 @@ def _deploy(flow_filename, flow_function_name, options):
             image_pull_policy="Always",
             finished_job_ttl=120,
             namespace=f"oit-eds-prefect-{label}",
+            command="cd ~ && python -m prefect.engine",
             customizations=[
                 {
                     "op": "add",
@@ -203,17 +204,7 @@ def _deploy(flow_filename, flow_function_name, options):
                 {
                     "op": "add",
                     "path": "/spec/template/spec/imagePullSecrets/0",
-                    "value": {"name": "artifactory-secret"},
-                },
-                {
-                    "op": "add",
-                    "path": "/spec/template/spec/containers/0/securityContext",
-                    "value": {"runAsUser": 1001040000},
-                },
-                {
-                    "op": "add",
-                    "path": "/spec/template/spec/securityContext",
-                    "value": {"fsGroup": 1001040000},
+                    "value": {"name": "registry-secret"},
                 },
             ],
         )
