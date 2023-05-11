@@ -194,7 +194,6 @@ def _deploy(flow_filename, flow_function_name, options):
             image_pull_policy="Always",
             finished_job_ttl=120,
             namespace=f"oit-eds-prefect-{label}",
-            command="cd ~ && python -m prefect.engine",
             customizations=[
                 {
                     "op": "add",
