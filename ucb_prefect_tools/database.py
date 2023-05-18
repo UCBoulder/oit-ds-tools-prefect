@@ -20,7 +20,7 @@ the constructor indicated in the list above, with some exceptions:
 import cx_Oracle
 import psycopg2
 import pyodbc
-from mysql import connector
+from mysql import connector as mysql_connector
 from prefect import task, get_run_logger
 import pandas as pd
 
@@ -62,7 +62,7 @@ def sql_extract(
         oracle=oracle_sql_extract,
         postgre=get_sql_extract("Postgre", psycopg2.connect),
         odbc=get_sql_extract("ODBC", odbc_connect),
-        mysql=get_sql_extract("MySQL", mysql.connector.connect),
+        mysql=get_sql_extract("MySQL", mysql_connector.connect),
     )
     dataframe = function(
         sql_query, info, query_params, lob_columns, chunks_prefix, chunksize
@@ -100,7 +100,7 @@ def insert(
         oracle=oracle_insert,
         postgre=get_insert("Postgre", psycopg2.connect),
         odbc=get_insert("ODBC", odbc_connect),
-        mysql=get_insert("MySQL", mysql.connector.connect),
+        mysql=get_insert("MySQL", mysql_connector.connect),
     )
     return function(
         dataframe,
@@ -144,7 +144,7 @@ def update(
         oracle=oracle_update,
         postgre=get_update("Postgre", psycopg2.connect),
         odbc=get_update("ODBC", odbc_connect),
-        mysql=get_update("MySQL", mysql.connector.connect),
+        mysql=get_update("MySQL", mysql_connector.connect),
     )
     return function(
         dataframe,
@@ -168,7 +168,7 @@ def execute_sql(sql_statement: str, connection_info: dict, query_params=None):
         oracle=oracle_execute_sql,
         postgre=get_execute_sql("Postgre", psycopg2.connect),
         odbc=get_execute_sql("ODBC", odbc_connect),
-        mysql=get_execute_sql("MySQL", mysql.connector.connect),
+        mysql=get_execute_sql("MySQL", mysql_connector.connect),
     )
     return function(sql_statement, info, query_params)
 
