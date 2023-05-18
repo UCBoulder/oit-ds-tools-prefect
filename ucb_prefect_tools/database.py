@@ -20,7 +20,7 @@ the constructor indicated in the list above, with some exceptions:
 import cx_Oracle
 import psycopg2
 import pyodbc
-import mysql
+from mysql import connector
 from prefect import task, get_run_logger
 import pandas as pd
 
