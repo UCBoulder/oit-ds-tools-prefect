@@ -1,5 +1,7 @@
 """General utility functions to make flows easier to implement with Prefect Cloud"""
 
+import inspect
+import re
 import argparse
 import importlib
 from datetime import datetime
@@ -133,10 +135,6 @@ def run_flow_command_line_interface(flow_filename, flow_function_name, args=None
 
 
 def _deploy(flow_filename, flow_function_name, options):
-    # pylint:disable=too-many-locals
-    # pylint:disable=too-many-branches
-    # pylint:disable=too-many-statements
-
     # Parse options and check file locations
     parser = argparse.ArgumentParser()
     parser.add_argument("--image-name", type=str, default="oit-ds-prefect-default")
@@ -186,6 +184,16 @@ def _deploy(flow_filename, flow_function_name, options):
         except KeyError:
             module = importlib.import_module(module_name)
             flow_function = getattr(module, flow_function_name)
+        # Parse flow docstring
+        # This dict relates docstring fields with validation criteria
+        docstring_fields = {"size": lambda x: x in ["small", "large"]}
+        metadata = _parse_docstring_fields(flow_function, docstring_fields)
+
+        # Determine Kubernetes limits
+        limits = {
+            "small": {"memory": "1Gi", "cpu": "250m"},
+            "large": {"memory": "10Gi", "cpu": "500m"},
+        }
 
         # Create Kubernetes infrastructure
         image_uri = f"{DOCKER_REGISTRY}/{args.image_name}:{args.image_branch}"
@@ -204,6 +212,18 @@ def _deploy(flow_filename, flow_function_name, options):
                     "op": "add",
                     "path": "/spec/template/spec/imagePullSecrets/0",
                     "value": {"name": "registry-secret"},
+                },
+                {
+                    "op": "add",
+                    "path": "/spec/template/spec/containers/0/resources",
+                    "value": {
+                        "limits": limits[metadata["size"]],
+                    },
+                },
+                {
+                    "op": "add",
+                    "path": "/spec/backoffLimit",
+                    "value": 0,
                 },
             ],
         )
@@ -231,8 +251,8 @@ def _deploy(flow_filename, flow_function_name, options):
         deployment = Deployment.build_from_flow(
             flow=flow_function,
             name=f"{repo_short_name} | {branch_name} | {module_name}",
-            tags=[label],
-            work_queue_name=label,
+            tags=[label, metadata["size"]],
+            work_queue_name=f"{label}-{metadata['size']}",
             work_pool_name="open-shift",
             infrastructure=k8s_job,
             storage=storage,
@@ -287,3 +307,25 @@ def sizeof_fmt(num: int) -> str:
             return f"{num:3.1f} {unit}"
         num /= 1024.0
     return f"{num:.1f} PB"
+
+
+def _parse_docstring_fields(function, fields):
+    docstring = inspect.getdoc(function)
+    result = {i: None for i in fields.keys()}
+    if docstring:
+        for field, validator in fields.items():
+            pattern = rf":{field}:\s*(\w+)"
+            matches = re.findall(pattern, docstring)
+            # Check just one value found and that it is a valid value
+            if len(matches) == 1:
+                value = matches[0]
+                if not validator(value):
+                    raise ValueError(
+                        f"Value '{value}' of {field} in flow docstring is not allowed"
+                    )
+                result[field] = value
+            else:
+                raise ValueError(
+                    f"More than one entry found for {field} in flow docstring"
+                )
+    return result
