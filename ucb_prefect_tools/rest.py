@@ -14,12 +14,13 @@ Each tasks attempts to return a Python object from JSON results, but if results 
 then the raw bytes content is returned instead.
 """
 
-from typing import Callable
+from typing import Callable, Literal
 from json.decoder import JSONDecodeError
 from multiprocessing.pool import ThreadPool
 
 from prefect import task, get_run_logger
 import requests
+from requests.exceptions import HTTPError
 import pandas as pd
 
 from .util import sizeof_fmt
@@ -109,7 +110,7 @@ def get_many(
     params_list: list[dict] = None,
     next_page_getter: Callable = None,
     to_dataframe: bool = False,
-    codes_to_ignore: list = None,
+    on_error: Literal("raise", "catch") = "raise",
     num_workers: int = 1,
 ) -> list:
     """Sends many GET requests defined by a list of endpoints and a corresponding list of params
@@ -117,8 +118,21 @@ def get_many(
     dataframes) comprising the result of each individual GET request. See rest.get task for more
     info.
 
-    codes_to_ignore denotes HTTP response codes (from requests.codes) which will simply be omitted
-    from the results instead of being raised as exceptions.
+    If on_error is "catch", any HTTPErrors raised by requests.get will be returned inline within
+    the results list, preserving order. For example if you want to ignore 404 responses but raise
+    anything else:
+        ```
+        results = get_many(..., on_error="catch")
+        non_404_errors = [
+            i
+            for i in results
+            if isinstance(i, requests.exceptions.HTTPError)
+            and i.response.status_code != requests.codes["not found"]
+        ]
+        if non_404_errors:
+            raise non_404_errors[0]
+        ok_results = [i for i in results if not isinstance(i, requests.exceptions.HTTPError)]
+        ```
 
     If num_workers > 1, will use a ThreadPool with this many workers to send the requests. The
     order of results will be preserved. Note that this is superior to using get.map due to
@@ -128,7 +142,9 @@ def get_many(
     # pylint:disable=too-many-locals
 
     get_run_logger().info(
-        f'REST: Sending {len(endpoints)} GET requests to {connection_info["domain"]} ...'
+        "REST: Sending %s GET requests to %s ...",
+        len(endpoints),
+        connection_info["domain"],
     )
     if params_list is None:
         params_list = [None] * len(endpoints)
@@ -160,7 +176,6 @@ def get_many(
                 "params": params,
                 "next_page_getter": next_page_getter,
                 "to_dataframe": to_dataframe,
-                "codes_to_ignore": codes_to_ignore,
                 "log": False,
             }
             for endpoint, params in zip(endpoints, params_list)
@@ -175,32 +190,45 @@ def get_many(
                     count += 1
                     if count % 1000 == 0:
                         get_run_logger().info(
-                            f"Received {count} results out of {len(endpoints)} so far..."
+                            "Received %s results out of %s so far...",
+                            count,
+                            len(endpoints),
                         )
                 except StopIteration:
                     break
 
-    # filter and return results
-    filled_results = [i for i in results if not i is None]
-    ignored = len(results) - len(filled_results)
-    # sum up sizes, skipping exceptions
-    total_size = sizeof_fmt(
-        sum(
-            0 if isinstance(result, BaseException) else result[1]
-            for result in filled_results
-        )
-    )
+    # Filter and log results
+    final_results = []
+    successes = 0
+    total_size = 0
+    caught = 0
+    uncaught = []
+    for result in results:
+        if not isinstance(result, BaseException):
+            data, size = result
+            final_results.append(data)
+            successes += 1
+            total_size += size
+        elif on_error == "catch" and isinstance(result, HTTPError):
+            final_results.append(result)
+            caught += 1
+        else:
+            uncaught.append(result)
     get_run_logger().info(
-        f"REST: Received {len(filled_results)} responses ({total_size}), with {ignored} ignored"
+        "REST: Received %s success responses (%s) and caught %s HTTP response errors",
+        successes,
+        sizeof_fmt(total_size),
+        caught,
     )
-    failures = [i for i in filled_results if isinstance(i, BaseException)]
-    if failures:
+    # If uncaught exceptions, raise them now
+    if uncaught:
         get_run_logger().error(
-            f"REST: Encountered {len(failures)} exceptions while sending requests. Only the first "
-            "will be raised."
+            "REST: Encountered %s uncaught exceptions while sending requests. Only the first "
+            "will be raised.",
+            len(uncaught),
         )
-        raise failures[0]
-    return [response for response, size in filled_results]
+        raise uncaught[0]
+    return final_results
 
 
 @task(name="rest.post_many")
@@ -329,12 +357,12 @@ def _get(
     params,
     next_page_getter,
     to_dataframe,
-    codes_to_ignore=None,
     log=True,
 ):
     # pylint:disable=too-many-arguments
     # pylint:disable=too-many-locals
     # pylint:disable=too-many-branches
+    # pylint:disable=unnecessary-lambda-assignment
 
     if not next_page_getter:
         next_page_getter = lambda _: None
@@ -342,9 +370,9 @@ def _get(
     domain = info.pop("domain")
     url = domain + endpoint
     if log:
-        get_run_logger().info(f"REST: Sending GET to {url} ...")
+        get_run_logger().info("REST: Sending GET to %s ...", url)
     auth = info.pop("auth", None)
-    kwargs = {"headers": info}
+    kwargs = {"headers": info, "timeout": 60}
     if auth:
         if isinstance(auth, list):
             kwargs["auth"] = tuple(auth)
@@ -356,8 +384,6 @@ def _get(
     data = []
     while True:
         response = requests.get(url, **kwargs)
-        if codes_to_ignore and response.status_code in codes_to_ignore:
-            return None
         response.raise_for_status()
         size += len(response.content)
         try:
@@ -385,7 +411,7 @@ def _get(
 
     if log:
         get_run_logger().info(
-            f"REST: Received {len(data)} objects ({sizeof_fmt(size)} total)"
+            "REST: Received %s objects (%s total)", len(data), sizeof_fmt(size)
         )
         if to_dataframe:
             return pd.DataFrame(data)
@@ -409,7 +435,9 @@ def _send_modify_request(
     domain = info.pop("domain")
     url = domain + endpoint
     if log:
-        get_run_logger().info(f"REST: Sending {method.__name__.upper()} to {url} ...")
+        get_run_logger().info(
+            "REST: Sending %s to %s ...", method.__name__.upper(), url
+        )
     auth = info.pop("auth", None)
     kwargs = {"headers": info}
     if auth:
@@ -432,7 +460,7 @@ def _send_modify_request(
     else:
         size = 0
     if log:
-        get_run_logger().info(f"REST: Sent {sizeof_fmt(size)} bytes")
+        get_run_logger().info("REST: Sent %s bytes", sizeof_fmt(size))
         try:
             return response.json()
         except JSONDecodeError:
@@ -460,7 +488,10 @@ def _send_modify_requests(
 
     method_name = method.__name__.upper()
     get_run_logger().info(
-        f'REST: Sending {len(endpoints)} {method_name} requests to {connection_info["domain"]} ...'
+        "REST: Sending %s %s requests to %s ...",
+        len(endpoints),
+        method_name,
+        connection_info["domain"],
     )
     if params_list is None:
         params_list = [None] * len(endpoints)
@@ -526,7 +557,8 @@ def _send_modify_requests(
                     count += 1
                     if count % 1000 == 0:
                         get_run_logger().info(
-                            f"Received {count} results out of {len(endpoints)} so far..."
+                            "Received %s results out of {len(endpoints)} so far...",
+                            count,
                         )
                 except StopIteration:
                     break
@@ -536,13 +568,14 @@ def _send_modify_requests(
         0 if isinstance(result, BaseException) else result[1] for result in results
     )
     get_run_logger().info(
-        f"REST: Received {len(results)} responses ({sizeof_fmt(total_size)} total)"
+        "REST: Received %s responses (%s total)", len(results), sizeof_fmt(total_size)
     )
     failures = [i for i in results if isinstance(i, BaseException)]
     if failures:
         get_run_logger().error(
-            f"REST: Encountered {len(failures)} exceptions while sending requests. Only the first "
-            "will be raised."
+            "REST: Encountered %s exceptions while sending requests. Only the first "
+            "will be raised.",
+            len(failures),
         )
         raise failures[0]
     return [response for response, size in results]
