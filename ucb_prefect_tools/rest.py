@@ -110,7 +110,7 @@ def get_many(
     params_list: list[dict] = None,
     next_page_getter: Callable = None,
     to_dataframe: bool = False,
-    on_error: Literal("raise", "catch") = "raise",
+    on_error: Literal["raise", "catch"] = "raise",
     num_workers: int = 1,
 ) -> list:
     """Sends many GET requests defined by a list of endpoints and a corresponding list of params
