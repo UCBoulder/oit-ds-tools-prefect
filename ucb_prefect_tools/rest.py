@@ -557,8 +557,9 @@ def _send_modify_requests(
                     count += 1
                     if count % 1000 == 0:
                         get_run_logger().info(
-                            "Received %s results out of {len(endpoints)} so far...",
+                            "Received %s results out of %s so far...",
                             count,
+                            len(endpoints),
                         )
                 except StopIteration:
                     break
