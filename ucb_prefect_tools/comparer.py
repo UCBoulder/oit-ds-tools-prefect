@@ -196,5 +196,5 @@ def bulk_compare(
                 "value": metrics.values(),
             }
         )
-        out = pd.concat(out, new_rows, ignore_index=True)
+        out = pd.concat([out, new_rows], ignore_index=True)
     return out
