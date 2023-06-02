@@ -7,6 +7,7 @@ supported system:
     - "postgre" for psycopg2.connect
     - "odbc" for odbc_connect (see below), a helper function that turns keyword args into an odbc
         connection string
+    - "mysql" for mysql.connector.connect
 
 The remaining KVs of connection_info should map directly to the keyword arguments used in calling
 the constructor indicated in the list above, with some exceptions:
@@ -19,6 +20,7 @@ the constructor indicated in the list above, with some exceptions:
 import oracledb
 import psycopg2
 import pyodbc
+from mysql import connector as mysql_connector
 from prefect import task, get_run_logger
 import pandas as pd
 
@@ -60,6 +62,7 @@ def sql_extract(
         oracle=oracle_sql_extract,
         postgre=get_sql_extract("Postgre", psycopg2.connect),
         odbc=get_sql_extract("ODBC", odbc_connect),
+        mysql=get_sql_extract("MySQL", mysql_connector.connect),
     )
     dataframe = function(
         sql_query, info, query_params, lob_columns, chunks_prefix, chunksize
@@ -97,6 +100,7 @@ def insert(
         oracle=oracle_insert,
         postgre=get_insert("Postgre", psycopg2.connect),
         odbc=get_insert("ODBC", odbc_connect),
+        mysql=get_insert("MySQL", mysql_connector.connect),
     )
     return function(
         dataframe,
@@ -140,6 +144,7 @@ def update(
         oracle=oracle_update,
         postgre=get_update("Postgre", psycopg2.connect),
         odbc=get_update("ODBC", odbc_connect),
+        mysql=get_update("MySQL", mysql_connector.connect),
     )
     return function(
         dataframe,
@@ -163,6 +168,7 @@ def execute_sql(sql_statement: str, connection_info: dict, query_params=None):
         oracle=oracle_execute_sql,
         postgre=get_execute_sql("Postgre", psycopg2.connect),
         odbc=get_execute_sql("ODBC", odbc_connect),
+        mysql=get_execute_sql("MySQL", mysql_connector.connect),
     )
     return function(sql_statement, info, query_params)
 
@@ -627,7 +633,7 @@ def get_insert(system_type, connection_func):
                 [None if pd.isnull(j) else j for j in i]
                 for i in dataframe.values.tolist()
             ]
-        elif system_type == "Postgre":
+        else:
             param_list = [f"%({i})s" for i in dataframe.columns]
             insert_sql = (
                 f'INSERT INTO {table_identifier} ({",".join(list(dataframe.columns))}) '
@@ -745,7 +751,7 @@ def get_update(system_type, connection_func):
             ]
             # Combine lists from each group so they will insert into the update statement
             records = [l + r for l, r in zip(set_values, match_values)]
-        elif system_type == "Postgre":
+        else:
             set_list = [f"{i} = %({i})s" for i in set_columns]
             match_list = [f"{i} = %({i})s" for i in match_on]
             # Replace NA values with None and turn to list of dicts
