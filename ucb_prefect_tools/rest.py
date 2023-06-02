@@ -26,7 +26,7 @@ import pandas as pd
 from .util import sizeof_fmt
 
 
-@task(name="rest.get", retries=3, retry_delay_seconds=10 * 60)
+@task(name="rest.get")
 def get(
     endpoint: str,
     connection_info: dict,
@@ -64,7 +64,7 @@ def post(
     )
 
 
-@task(name="rest.put", retries=3, retry_delay_seconds=10 * 60)
+@task(name="rest.put")
 def put(
     endpoint: str, connection_info: dict, params=None, data=None, json=None, files=None
 ):
@@ -90,7 +90,7 @@ def patch(
     )
 
 
-@task(name="rest.delete", retries=3, retry_delay_seconds=10 * 60)
+@task(name="rest.delete")
 def delete(
     endpoint: str, connection_info: dict, params=None, data=None, json=None, files=None
 ):
@@ -103,7 +103,7 @@ def delete(
     )
 
 
-@task(name="rest.get_many", retries=3, retry_delay_seconds=10 * 60)
+@task(name="rest.get_many")
 def get_many(
     endpoints: list[str],
     connection_info: dict,
@@ -261,7 +261,7 @@ def post_many(
     )
 
 
-@task(name="rest.put_many", retries=3, retry_delay_seconds=10 * 60)
+@task(name="rest.put_many")
 def put_many(
     endpoints: list[str],
     connection_info: dict,

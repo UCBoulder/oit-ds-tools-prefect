@@ -29,7 +29,7 @@ from . import util
 # System-agnostic tasks
 
 
-@task(name="database.sql_extract", retries=3, retry_delay_seconds=10 * 60)
+@task(name="database.sql_extract")
 def sql_extract(
     sql_query: str,
     connection_info: dict,
@@ -112,7 +112,7 @@ def insert(
     )
 
 
-@task(name="database.update", retries=3, retry_delay_seconds=10 * 60)
+@task(name="database.update")
 def update(
     dataframe: pd.DataFrame,
     table_identifier: str,
