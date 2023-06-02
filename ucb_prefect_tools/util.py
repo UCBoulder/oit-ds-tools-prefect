@@ -1,7 +1,5 @@
 """General utility functions to make flows easier to implement with Prefect Cloud"""
 
-import inspect
-import re
 import argparse
 import importlib
 from datetime import datetime
@@ -188,21 +186,10 @@ def _deploy(flow_filename, flow_function_name, options):
         # Import the module and flow
         module_name = os.path.splitext(flow_filename)[0]
         try:
-            flow = getattr(sys.modules["__main__"], flow_function_name)
+            flow_function = getattr(sys.modules["__main__"], flow_function_name)
         except KeyError:
             module = importlib.import_module(module_name)
-            flow = getattr(module, flow_function_name)
-
-        docstring_fields = {"retry-safe": lambda x: x in ["true", "false"]}
-        metadata = _parse_docstring_fields(flow, docstring_fields)
-
-        # Add retries for main flow deployments if appropriate
-        if metadata["retry-safe"] == "true" and label == "main":
-            flow = flow.with_options(
-                retries=2,
-                retry_delay_seconds=[5 * 60, 15 * 60],
-                retry_jitter_factor=0.1,
-            )
+            flow_function = getattr(module, flow_function_name)
 
         # Create docker infrastructure
         image_uri = f"{DOCKER_REGISTRY}/{args.image_name}:{args.image_branch}"
@@ -233,7 +220,7 @@ def _deploy(flow_filename, flow_function_name, options):
 
         # Deploy flow
         deployment = Deployment.build_from_flow(
-            flow=flow,
+            flow=flow_function,
             name=f"{repo_short_name} | {branch_name} | {module_name}",
             tags=[label],
             work_queue_name=label,
@@ -250,29 +237,6 @@ def _deploy(flow_filename, flow_function_name, options):
         # pylint:disable=broad-except
         except Exception:
             pass
-
-
-def _parse_docstring_fields(function, fields):
-    docstring = inspect.getdoc(function)
-    result = {i: None for i in fields.keys()}
-    if docstring:
-        for field, validator in fields.items():
-            pattern = rf":{field}:\s*(\w+)"
-            matches = re.findall(pattern, docstring)
-            # Check just one value found and that it is a valid value
-            if len(matches) == 1:
-                value = matches[0]
-                if not validator(value):
-                    raise ValueError(
-                        f"Value '{value}' of field '{field}' in flow docstring is not allowed"
-                    )
-                result[field] = value
-            else:
-                raise ValueError(
-                    f"Found {len(matches)} entries for '{field}' in flow docstring; "
-                    "must have exactly 1"
-                )
-    return result
 
 
 def reveal_secrets(json_obj) -> dict:
