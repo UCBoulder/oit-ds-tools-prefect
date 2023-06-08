@@ -61,7 +61,7 @@ def _switch(connection_info, **kwargs):
     raise ValueError(f'System type "{connection_info["system_type"]}" is not supported')
 
 
-@task(name="object_storage.get", retries=3, retry_delay_seconds=10 * 60)
+@task(name="object_storage.get")
 def get(object_name: str, connection_info: dict) -> bytes:
     """Returns the bytes content for the given file/object on the identified system. Raises
     FileNotFoundError if the file could not be found."""
@@ -71,7 +71,7 @@ def get(object_name: str, connection_info: dict) -> bytes:
     return function(object_name, info)
 
 
-@task(name="object_storage.put", retries=3, retry_delay_seconds=10 * 60)
+@task(name="object_storage.put")
 def put(
     binary_object: Union[BinaryIO, bytes], object_name: str, connection_info: dict
 ) -> None:
@@ -86,7 +86,7 @@ def put(
     function(binary_object, object_name, info)
 
 
-@task(name="object_storage.remove", retries=3, retry_delay_seconds=10 * 60)
+@task(name="object_storage.remove")
 def remove(object_name: str, connection_info: dict) -> None:
     """Removes the identified file/object."""
 
@@ -97,10 +97,11 @@ def remove(object_name: str, connection_info: dict) -> None:
     function(object_name, info)
 
 
-@task(name="object_storage.list_names", retries=3, retry_delay_seconds=10 * 60)
+@task(name="object_storage.list_names")
 def list_names(connection_info: dict, prefix: str = None) -> list[str]:
     """Returns a list of object or file names in the given folder. Filters by object name prefix,
-    which includes directory path for file systems. Folders are not included; non-recursive."""
+    which includes directory path for file systems. Folders are not included; non-recursive.
+    """
 
     info = connection_info.copy()
     function = _switch(info, sftp=sftp_list, minio=minio_list, s3=s3_list, smb=smb_list)
@@ -109,7 +110,7 @@ def list_names(connection_info: dict, prefix: str = None) -> list[str]:
     return function(info)
 
 
-@task(name="object_storage.store_dataframe", retries=3, retry_delay_seconds=10 * 60)
+@task(name="object_storage.store_dataframe")
 def store_dataframe(
     dataframe: pd.DataFrame, object_name: str, connection_info: dict
 ) -> None:
@@ -130,7 +131,7 @@ def store_dataframe(
     function(data, object_name, info)
 
 
-@task(name="object_storage.retrieve_dataframe", retries=3, retry_delay_seconds=10 * 60)
+@task(name="object_storage.retrieve_dataframe")
 def retrieve_dataframe(object_name: str, connection_info: dict) -> pd.DataFrame:
     """Writes the given dataframe to the identified storage system. The storage method and format
     should be considered opaque; reading the data should only be done with retrieve_dataframe.
@@ -206,12 +207,19 @@ def _sftp_chdir(sftp, remote_directory):
     if remote_directory == "":
         # top-level relative directory must exist
         return
+
     try:
         sftp.chdir(remote_directory)  # sub-directory exists
     except IOError:
         dirname, basename = os.path.split(remote_directory.rstrip("/"))
+
         _sftp_chdir(sftp, dirname)  # make parent directories
-        sftp.mkdir(basename)  # sub-directory missing, so created it
+
+        try:
+            sftp.mkdir(basename)  # sub-directory missing, so created it
+        except OSError:
+            pass
+
         sftp.chdir(basename)
 
 
@@ -482,7 +490,8 @@ def s3_put(
 
 def s3_remove(object_key: str, connection_info: dict, VersionId: str = None) -> None:
     """Removes the identified object from an Amazon S3 bucket. The optional VersionId parameter
-    is passed to the delete method if provided (otherwise, the null version is deleted."""
+    is passed to the delete method if provided (otherwise, the null version is deleted.
+    """
 
     # pylint:disable=invalid-name
     bucket = connection_info["bucket"]
