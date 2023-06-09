@@ -1,5 +1,7 @@
 """General utility functions to make flows easier to implement with Prefect Cloud"""
 
+import inspect
+import re
 import argparse
 import importlib
 from datetime import datetime
@@ -14,25 +16,24 @@ from contextlib import contextmanager
 import asyncio
 import uuid
 
-from prefect import task, get_run_logger, tags, context
+from prefect import task, get_run_logger, tags, context, deployments, settings
 from prefect.utilities.filesystem import create_default_ignore_file
-from prefect.deployments import Deployment
 from prefect.filesystems import RemoteFileSystem
 from prefect.blocks.system import Secret, JSON
-from prefect.infrastructure.docker import DockerContainer
+from prefect.infrastructure import KubernetesJob
 from prefect.client.orchestration import get_client
 import git
 import pytz
-
-# pylint:disable=unused-import
-# Import docker here as a workaround for https://github.com/PrefectHQ/prefect/issues/6519
-import docker
 
 # Overrideable settings related to deployments
 DOCKER_REGISTRY = "oit-data-services-docker-local.artifactory.colorado.edu"
 LOCAL_FLOW_FOLDER = "flows"
 FLOW_STORAGE_CONNECTION_BLOCK = "ds-flow-storage"
 REPO_PREFIX = "oit-ds-flows-"
+POD_SIZES = {
+    "small": {"memory": "1Gi", "cpu": "250m"},
+    "large": {"memory": "10Gi", "cpu": "500m"},
+}
 
 # Timezone for `now` function
 TIMEZONE = "America/Denver"
@@ -128,24 +129,44 @@ def run_flow_command_line_interface(flow_filename, flow_function_name, args=None
 
     if args is None:
         args = sys.argv[1:]
-    command = args[0]
-    options = args[1:]
-    if command == "deploy":
-        _deploy(flow_filename, flow_function_name, options)
-    else:
-        raise ValueError(f"Command {command} is not implemented")
-
-
-def _deploy(flow_filename, flow_function_name, options):
-    # pylint:disable=too-many-locals
-    # pylint:disable=too-many-branches
-    # pylint:disable=too-many-statements
-
-    # Parse options and check file locations
     parser = argparse.ArgumentParser()
+    parser.add_argument("command", choices=["deploy", "run"])
     parser.add_argument("--image-name", type=str, default="oit-ds-prefect-default")
     parser.add_argument("--image-branch", type=str, default="main")
-    args = parser.parse_args(options)
+    parsed_args = parser.parse_args(args)
+    if parsed_args.command == "deploy":
+        _deploy(
+            flow_filename,
+            flow_function_name,
+            parsed_args.image_name,
+            parsed_args.image_branch,
+        )
+    if parsed_args.command == "run":
+        if git.Repo().active_branch.name == "main":
+            raise RuntimeError('Command "run" not allowed from main branch')
+        deployment_id = _deploy(
+            flow_filename,
+            flow_function_name,
+            parsed_args.image_name,
+            parsed_args.image_branch,
+        )
+        print("Running deployment...")
+        flow_run = deployments.run_deployment(deployment_id)
+        print(
+            f'Flow run "{flow_run.name}" finished with state {flow_run.state_name}: '
+            f"{settings.PREFECT_UI_URL.value()}/flow-runs/flow-run/{flow_run.id}"
+        )
+        asyncio.run(_delete_deployment(deployment_id))
+        print("Deleted deployment")
+
+
+async def _delete_deployment(deployment_id):
+    async with get_client() as client:
+        await client.delete_deployment(deployment_id)
+
+
+def _deploy(flow_filename, flow_function_name, image_name, image_branch):
+    # Check file locations
     if create_default_ignore_file(LOCAL_FLOW_FOLDER):
         print("Created default .prefectignore file")
     flow_filename = os.path.basename(flow_filename)
@@ -154,7 +175,65 @@ def _deploy(flow_filename, flow_function_name, options):
             f"File {flow_filename} not found in the {LOCAL_FLOW_FOLDER} folder"
         )
 
-    # Get git repo information and validate state
+    # Get repo info then temporarily switch into flows folder to make importing easier
+    label, repo_name, branch_name = _get_repo_info()
+    with _ChangeDir(LOCAL_FLOW_FOLDER):
+
+        # Import the module and flow
+        module_name = os.path.splitext(flow_filename)[0]
+        try:
+            flow = getattr(sys.modules["__main__"], flow_function_name)
+        except KeyError:
+            module = importlib.import_module(module_name)
+            flow = getattr(module, flow_function_name)
+
+        # Parse flow docstring
+        # This dict relates docstring fields with validation criteria
+        docstring_fields = {"size": lambda x: x in POD_SIZES}
+        metadata = _parse_docstring_fields(flow, docstring_fields)
+
+        # Now we can setup infrastructure and deploy the flow
+        image_uri = f"{DOCKER_REGISTRY}/{image_name}:{image_branch}"
+        flow.name = f"{repo_name} | {module_name}"
+        deployment = deployments.Deployment.build_from_flow(
+            flow=flow,
+            name=f"{repo_name} | {branch_name} | {module_name}",
+            tags=[label, metadata["size"]],
+            work_queue_name=f"{label}-{metadata['size']}",
+            work_pool_name="open-shift",
+            infrastructure=_get_flow_infrastructure(label, image_uri, metadata["size"]),
+            storage=_get_flow_storage(),
+            # Path must end in slash!
+            path=(
+                f"main/{repo_name}/"
+                if label == "main"
+                else f"{label}/{repo_name}/{branch_name}/"
+            ),
+        )
+        deployment_id = deployment.apply(upload=True)
+        print(
+            f"Deployed {deployment.name} using docker image {image_uri}: "
+            f"{settings.PREFECT_UI_URL.value()}/deployments/deployment/{deployment_id}"
+        )
+        return deployment_id
+
+
+class _ChangeDir:
+    """Allows temporary directory change"""
+
+    def __init__(self, path):
+        self.path = path
+        self.saved_path = None
+
+    def __enter__(self):
+        self.saved_path = os.getcwd()
+        os.chdir(self.path)
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        os.chdir(self.saved_path)
+
+
+def _get_repo_info():
     repo = git.Repo()
     repo_name = os.path.basename(repo.working_dir)
     repo_short_name = repo_name.removeprefix(REPO_PREFIX)
@@ -173,70 +252,85 @@ def _deploy(flow_filename, flow_function_name, options):
                 "Commit or discard changes to continue."
             )
         label = "main"
-        storage_path = f"main/{repo_name}"
     else:
         label = "dev"
-        storage_path = f"dev/{repo_name}/{branch_name}"
+    return label, repo_short_name, branch_name
 
-    # Change into the flows folder and change back when done
-    cwd = os.getcwd()
-    os.chdir(LOCAL_FLOW_FOLDER)
-    try:
 
-        # Import the module and flow
-        module_name = os.path.splitext(flow_filename)[0]
-        try:
-            flow_function = getattr(sys.modules["__main__"], flow_function_name)
-        except KeyError:
-            module = importlib.import_module(module_name)
-            flow_function = getattr(module, flow_function_name)
-
-        # Create docker infrastructure
-        image_uri = f"{DOCKER_REGISTRY}/{args.image_name}:{args.image_branch}"
-        docker_container = DockerContainer(
-            image=image_uri,
-            image_pull_policy="ALWAYS",
-            auto_remove=True,
-        )
-
-        # Create flow storage infrastructure
-        storage_conn = reveal_secrets(JSON.load(FLOW_STORAGE_CONNECTION_BLOCK).value)
-        if storage_conn["system_type"] == "minio":
-            endpoint_url = storage_conn["endpoint"]
-            if not endpoint_url.startswith("https://"):
-                endpoint_url = "https://" + endpoint_url
-            storage = RemoteFileSystem(
-                basepath=f's3://{storage_conn["bucket"]}/{storage_path}',
-                settings={
-                    "key": storage_conn["access_key"],
-                    "secret": storage_conn["secret_key"],
-                    "client_kwargs": {"endpoint_url": endpoint_url},
+def _get_flow_infrastructure(label, image_uri, flow_size):
+    # Create Kubernetes infrastructure
+    return KubernetesJob(
+        image=image_uri,
+        image_pull_policy="Always",
+        finished_job_ttl=1200,
+        namespace=f"oit-eds-prefect-{label}",
+        customizations=[
+            {
+                "op": "add",
+                "path": "/spec/template/spec/imagePullSecrets",
+                "value": [],
+            },
+            {
+                "op": "add",
+                "path": "/spec/template/spec/imagePullSecrets/0",
+                "value": {"name": "registry-secret"},
+            },
+            {
+                "op": "add",
+                "path": "/spec/template/spec/containers/0/resources",
+                "value": {
+                    "limits": POD_SIZES[flow_size],
                 },
-            )
-        else:
-            raise ValueError(
-                f'Flow storage connection system type {storage_conn["system_type"]} not supported'
-            )
+            },
+            {
+                "op": "add",
+                "path": "/spec/backoffLimit",
+                "value": 0,
+            },
+        ],
+    )
 
-        # Deploy flow
-        deployment = Deployment.build_from_flow(
-            flow=flow_function,
-            name=f"{repo_short_name} | {branch_name} | {module_name}",
-            tags=[label],
-            work_queue_name=label,
-            infrastructure=docker_container,
-            storage=storage,
-            apply=True,
-            path="/",
+
+def _get_flow_storage():
+    storage_conn = reveal_secrets(JSON.load(FLOW_STORAGE_CONNECTION_BLOCK).value)
+    if storage_conn["system_type"] == "minio":
+        endpoint_url = storage_conn["endpoint"]
+        if not endpoint_url.startswith("https://"):
+            endpoint_url = "https://" + endpoint_url
+        return RemoteFileSystem(
+            basepath=f's3://{storage_conn["bucket"]}/',
+            settings={
+                "key": storage_conn["access_key"],
+                "secret": storage_conn["secret_key"],
+                "client_kwargs": {"endpoint_url": endpoint_url},
+            },
         )
-        print(f"Deployed {deployment.name} using docker image {image_uri}")
+    raise ValueError(
+        f'Flow storage connection system type {storage_conn["system_type"]} not supported'
+    )
 
-    finally:
-        try:
-            os.chdir(cwd)
-        # pylint:disable=broad-except
-        except Exception:
-            pass
+
+def _parse_docstring_fields(function, fields):
+    docstring = inspect.getdoc(function)
+    result = {i: None for i in fields.keys()}
+    if docstring:
+        for field, validator in fields.items():
+            pattern = rf":{field}:\s*(\w+)"
+            matches = re.findall(pattern, docstring)
+            # Check just one value found and that it is a valid value
+            if len(matches) == 1:
+                value = matches[0]
+                if not validator(value):
+                    raise ValueError(
+                        f"Value '{value}' of field '{field}' in flow docstring is not allowed"
+                    )
+                result[field] = value
+            else:
+                raise ValueError(
+                    f"Found {len(matches)} entries for '{field}' in flow docstring; "
+                    "must have exactly 1"
+                )
+    return result
 
 
 def reveal_secrets(json_obj) -> dict:
