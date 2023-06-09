@@ -30,6 +30,10 @@ DOCKER_REGISTRY = "oit-data-services-docker-local.artifactory.colorado.edu"
 LOCAL_FLOW_FOLDER = "flows"
 FLOW_STORAGE_CONNECTION_BLOCK = "ds-flow-storage"
 REPO_PREFIX = "oit-ds-flows-"
+POD_SIZES = {
+    "small": {"memory": "1Gi", "cpu": "250m"},
+    "large": {"memory": "10Gi", "cpu": "500m"},
+}
 
 # Timezone for `now` function
 TIMEZONE = "America/Denver"
@@ -185,7 +189,7 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch):
 
         # Parse flow docstring
         # This dict relates docstring fields with validation criteria
-        docstring_fields = {"size": lambda x: x in ["small", "large"]}
+        docstring_fields = {"size": lambda x: x in POD_SIZES}
         metadata = _parse_docstring_fields(flow, docstring_fields)
 
         # Now we can setup infrastructure and deploy the flow
@@ -254,12 +258,6 @@ def _get_repo_info():
 
 
 def _get_flow_infrastructure(label, image_uri, flow_size):
-    # Determine Kubernetes limits
-    limits = {
-        "small": {"memory": "1Gi", "cpu": "250m"},
-        "large": {"memory": "10Gi", "cpu": "500m"},
-    }
-
     # Create Kubernetes infrastructure
     return KubernetesJob(
         image=image_uri,
@@ -281,7 +279,7 @@ def _get_flow_infrastructure(label, image_uri, flow_size):
                 "op": "add",
                 "path": "/spec/template/spec/containers/0/resources",
                 "value": {
-                    "limits": limits[flow_size],
+                    "limits": POD_SIZES[flow_size],
                 },
             },
             {
