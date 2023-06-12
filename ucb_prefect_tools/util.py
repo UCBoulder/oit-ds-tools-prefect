@@ -72,6 +72,9 @@ def send_email(
             msg.attach(obj)
 
     mailserver = smtplib.SMTP(smtp_info["host"], smtp_info["port"])
+    if "username" in smtp_info:
+        mailserver.starttls()
+        mailserver.login(smtp_info["username"], smtp_info["password"])
 
     if addressed_to:
         info = f'Sending "{subject}" email to {addressed_to}'
