@@ -34,6 +34,10 @@ POD_SIZES = {
     "small": {"memory": "1Gi", "cpu": "250m"},
     "large": {"memory": "10Gi", "cpu": "500m"},
 }
+POD_REQUESTS = {
+    "small": {"memory": "500Mi", "cpu": "250m"},
+    "large": {"memory": "5Gi", "cpu": "250m"},
+}
 
 # Timezone for `now` function
 TIMEZONE = "America/Denver"
@@ -280,6 +284,7 @@ def _get_flow_infrastructure(label, image_uri, flow_size):
                 "path": "/spec/template/spec/containers/0/resources",
                 "value": {
                     "limits": POD_SIZES[flow_size],
+                    "requests": POD_REQUESTS[flow_size],
                 },
             },
             {
