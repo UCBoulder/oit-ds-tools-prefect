@@ -35,8 +35,8 @@ POD_SIZES = {
     "large": {"memory": "10Gi", "cpu": "500m"},
 }
 POD_REQUESTS = {
-    "small": {"memory": "500Mi", "cpu": "250m"},
-    "large": {"memory": "5Gi", "cpu": "250m"},
+    "small": {"memory": "512Mi", "cpu": "100m"},
+    "large": {"memory": "5Gi", "cpu": "100m"},
 }
 
 # Timezone for `now` function
