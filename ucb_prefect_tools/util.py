@@ -19,8 +19,8 @@ import uuid
 from prefect import task, get_run_logger, tags, context, deployments, settings
 from prefect.utilities.filesystem import create_default_ignore_file
 from prefect.filesystems import RemoteFileSystem
+from prefect.infrastructure import DockerContainer
 from prefect.blocks.system import Secret, JSON
-from prefect.infrastructure import KubernetesJob
 from prefect.client.orchestration import get_client
 import git
 import pytz
@@ -30,14 +30,6 @@ DOCKER_REGISTRY = "oit-data-services-docker-local.artifactory.colorado.edu"
 LOCAL_FLOW_FOLDER = "flows"
 FLOW_STORAGE_CONNECTION_BLOCK = "ds-flow-storage"
 REPO_PREFIX = "oit-ds-flows-"
-POD_SIZES = {
-    "small": {"memory": "1Gi", "cpu": "250m"},
-    "large": {"memory": "10Gi", "cpu": "500m"},
-}
-POD_REQUESTS = {
-    "small": {"memory": "512Mi", "cpu": "100m"},
-    "large": {"memory": "5Gi", "cpu": "100m"},
-}
 
 # Timezone for `now` function
 TIMEZONE = "America/Denver"
@@ -194,21 +186,16 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch):
             module = importlib.import_module(module_name)
             flow = getattr(module, flow_function_name)
 
-        # Parse flow docstring
-        # This dict relates docstring fields with validation criteria
-        docstring_fields = {"size": lambda x: x in POD_SIZES}
-        metadata = _parse_docstring_fields(flow, docstring_fields)
-
         # Now we can setup infrastructure and deploy the flow
         image_uri = f"{DOCKER_REGISTRY}/{image_name}:{image_branch}"
         flow.name = f"{repo_name} | {module_name}"
         deployment = deployments.Deployment.build_from_flow(
             flow=flow,
             name=f"{repo_name} | {branch_name} | {module_name}",
-            tags=[label, metadata["size"]],
-            work_queue_name=f"{label}-{metadata['size']}",
-            work_pool_name="open-shift",
-            infrastructure=_get_flow_infrastructure(label, image_uri, metadata["size"]),
+            tags=[label],
+            work_pool_name=f"{label}-agent",
+            work_queue_name=None,
+            infrastructure=_get_flow_infrastructure(image_uri),
             storage=_get_flow_storage(),
             # Path must end in slash!
             path=(
@@ -219,7 +206,8 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch):
         )
         deployment_id = deployment.apply(upload=True)
         print(
-            f"Deployed {deployment.name} using docker image {image_uri}: "
+            f"Deployed {deployment.name}\n\tWork Pool: {deployment.work_pool_name}\n\t"
+            f"Docker image: {image_uri}\n\tDeployment URL: "
             f"{settings.PREFECT_UI_URL.value()}/deployments/deployment/{deployment_id}"
         )
         return deployment_id
@@ -264,38 +252,11 @@ def _get_repo_info():
     return label, repo_short_name, branch_name
 
 
-def _get_flow_infrastructure(label, image_uri, flow_size):
-    # Create Kubernetes infrastructure
-    return KubernetesJob(
+def _get_flow_infrastructure(image_uri):
+    return DockerContainer(
         image=image_uri,
-        image_pull_policy="Always",
-        finished_job_ttl=1200,
-        namespace=f"oit-eds-prefect-{label}",
-        customizations=[
-            {
-                "op": "add",
-                "path": "/spec/template/spec/imagePullSecrets",
-                "value": [],
-            },
-            {
-                "op": "add",
-                "path": "/spec/template/spec/imagePullSecrets/0",
-                "value": {"name": "registry-secret"},
-            },
-            {
-                "op": "add",
-                "path": "/spec/template/spec/containers/0/resources",
-                "value": {
-                    "limits": POD_SIZES[flow_size],
-                    "requests": POD_REQUESTS[flow_size],
-                },
-            },
-            {
-                "op": "add",
-                "path": "/spec/backoffLimit",
-                "value": 0,
-            },
-        ],
+        image_pull_policy="ALWAYS",
+        auto_remove=True,
     )
 
 
