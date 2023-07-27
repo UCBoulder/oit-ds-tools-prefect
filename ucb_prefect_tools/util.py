@@ -189,7 +189,7 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch):
             flow_function = getattr(module, flow_function_name)
 
         # Parse docstring fields and action on them as appropriate
-        docstring_fields = _parse_docstring_fields(
+        docstring_fields = parse_docstring_fields(
             flow_function, {"tags": lambda x: all(i.strip() for i in x.split(","))}
         )
         # Additional tags are only included on main flows
@@ -293,7 +293,7 @@ def _get_flow_storage():
     )
 
 
-def _parse_docstring_fields(function, fields):
+def parse_docstring_fields(function, fields):
     docstring = inspect.getdoc(function)
     result = {i: "" for i in fields.keys()}
     if docstring:
