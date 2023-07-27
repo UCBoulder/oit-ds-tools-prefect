@@ -165,6 +165,8 @@ async def _delete_deployment(deployment_id):
 
 
 def _deploy(flow_filename, flow_function_name, image_name, image_branch):
+    # pylint: disable=too-many-locals
+
     # Check file locations
     if create_default_ignore_file(LOCAL_FLOW_FOLDER):
         print("Created default .prefectignore file")
@@ -181,18 +183,30 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch):
         # Import the module and flow
         module_name = os.path.splitext(flow_filename)[0]
         try:
-            flow = getattr(sys.modules["__main__"], flow_function_name)
+            flow_function = getattr(sys.modules["__main__"], flow_function_name)
         except KeyError:
             module = importlib.import_module(module_name)
-            flow = getattr(module, flow_function_name)
+            flow_function = getattr(module, flow_function_name)
+
+        # Parse docstring fields and action on them as appropriate
+        docstring_fields = _parse_docstring_fields(
+            flow_function, {"tags": lambda x: all(i.strip() for i in x.split(","))}
+        )
+        # Additional tags are only included on main flows
+        flow_tags = [label]
+        additional_tags = [i.strip() for i in docstring_fields["tags"].split(",") if i]
+        if label == "main":
+            flow_tags.extend(additional_tags)
+        else:
+            print(f"Additional tags not added to dev deployment: {additional_tags}")
 
         # Now we can setup infrastructure and deploy the flow
         image_uri = f"{DOCKER_REGISTRY}/{image_name}:{image_branch}"
-        flow.name = f"{repo_name} | {module_name}"
+        flow_function.name = f"{repo_name} | {module_name}"
         deployment = deployments.Deployment.build_from_flow(
-            flow=flow,
+            flow=flow_function,
             name=f"{repo_name} | {branch_name} | {module_name}",
-            tags=[label],
+            tags=flow_tags,
             work_pool_name=f"{label}-agent",
             work_queue_name=None,
             infrastructure=_get_flow_infrastructure(image_uri),
@@ -207,7 +221,7 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch):
         deployment_id = deployment.apply(upload=True)
         print(
             f"Deployed {deployment.name}\n\tWork Pool: {deployment.work_pool_name}\n\t"
-            f"Docker image: {image_uri}\n\tDeployment URL: "
+            f"Docker image: {image_uri}\n\tTags: {flow_tags}\n\tDeployment URL: "
             f"{settings.PREFECT_UI_URL.value()}/deployments/deployment/{deployment_id}"
         )
         return deployment_id
@@ -281,23 +295,23 @@ def _get_flow_storage():
 
 def _parse_docstring_fields(function, fields):
     docstring = inspect.getdoc(function)
-    result = {i: None for i in fields.keys()}
+    result = {i: "" for i in fields.keys()}
     if docstring:
         for field, validator in fields.items():
-            pattern = rf":{field}:\s*(\w+)"
-            matches = re.findall(pattern, docstring)
+            pattern = re.compile(r"^\s*:tags:\s*(.*)", re.MULTILINE)
+            matches = pattern.findall(docstring)
             # Check just one value found and that it is a valid value
             if len(matches) == 1:
-                value = matches[0]
+                value = matches[0].strip()
                 if not validator(value):
                     raise ValueError(
                         f"Value '{value}' of field '{field}' in flow docstring is not allowed"
                     )
                 result[field] = value
-            else:
+            elif len(matches) > 1:
                 raise ValueError(
                     f"Found {len(matches)} entries for '{field}' in flow docstring; "
-                    "must have exactly 1"
+                    "must have at most 1"
                 )
     return result
 
