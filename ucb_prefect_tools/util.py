@@ -190,7 +190,10 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch):
 
         # Parse docstring fields and action on them as appropriate
         docstring_fields = parse_docstring_fields(
-            flow_function, {"tags": lambda x: all(i.strip() for i in x.split(","))}
+            # Validate that "tags" is a list of 1 or more non-blank, comma-separated strings
+            # e.g. "tag1,, tag2" would fail due to a blank string in the middle slot
+            flow_function,
+            {"tags": lambda x: all(i.strip() for i in x.split(","))},
         )
         # Additional tags are only included on main flows
         flow_tags = [label]
@@ -299,7 +302,10 @@ def parse_docstring_fields(function, fields):
     any Sphinx-style field labels (like `:tags: crm-ops`) from the docstring. If any key in `fields`
     is not present in the docstring, its value is set to ''. Otherwise, values (like 'crm-ops')
     are passed to the corresponding function given in the `fields` dict to ensure they are valid.
-    Finally, we return a dictionary mapping field keys to values from the actual docstring."""
+    Finally, we return a dictionary mapping field keys to values from the actual docstring.
+
+    Raises ValueError if a label (e.g. `:tags:`) appears more than once in the docstring.
+    """
 
     docstring = inspect.getdoc(function)
     result = {i: "" for i in fields.keys()}
