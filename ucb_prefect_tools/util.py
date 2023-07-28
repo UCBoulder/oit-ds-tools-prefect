@@ -311,7 +311,7 @@ def parse_docstring_fields(function, fields):
     result = {i: "" for i in fields.keys()}
     if docstring:
         for field, validator in fields.items():
-            pattern = re.compile(r"^\s*:tags:\s*(.*)", re.MULTILINE)
+            pattern = re.compile(rf"^\s*:{field}:\s*(.*)", re.MULTILINE)
             matches = pattern.findall(docstring)
             # Check just one value found and that it is a valid value
             if len(matches) == 1:
