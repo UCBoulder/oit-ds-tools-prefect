@@ -197,7 +197,7 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch):
         additional_tags = [i.strip() for i in docstring_fields["tags"].split(",") if i]
         if label == "main":
             flow_tags.extend(additional_tags)
-        else:
+        elif additional_tags:
             print(f"Additional tags not added to dev deployment: {additional_tags}")
 
         # Now we can setup infrastructure and deploy the flow
@@ -294,6 +294,13 @@ def _get_flow_storage():
 
 
 def parse_docstring_fields(function, fields):
+    """Takes a function and a dictionary of field names mapped to functions that take field values
+    and return False if the field values are not valid. Looks at the function docstring and extracts
+    any Sphinx-style field labels (like `:tags: crm-ops`) from the docstring. If any key in `fields`
+    is not present in the docstring, its value is set to ''. Otherwise, values (like 'crm-ops')
+    are passed to the corresponding function given in the `fields` dict to ensure they are valid.
+    Finally, we return a dictionary mapping field keys to values from the actual docstring."""
+
     docstring = inspect.getdoc(function)
     result = {i: "" for i in fields.keys()}
     if docstring:
