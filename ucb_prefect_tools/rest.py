@@ -33,6 +33,7 @@ def get(
     params: dict = None,
     next_page_getter: Callable = None,
     to_dataframe: bool = False,
+    timeout: int = 60
 ) -> list:
     """Sends a GET request to the specified endpoint, along with any params, and returns a list
     of JSON results.
@@ -48,7 +49,7 @@ def get(
     """
     # pylint:disable=too-many-arguments
 
-    return _get(endpoint, connection_info, params, next_page_getter, to_dataframe)
+    return _get(endpoint, connection_info, params, next_page_getter, to_dataframe, timeout=timeout)
 
 
 @task(name="rest.post")
@@ -112,6 +113,7 @@ def get_many(
     to_dataframe: bool = False,
     on_error: Literal["raise", "catch"] = "raise",
     num_workers: int = 1,
+    timeout: int = 60
 ) -> list:
     """Sends many GET requests defined by a list of endpoints and a corresponding list of params
     dicts. Other params are applied to every GET request. Returns a list of lists (or a list of
@@ -163,6 +165,7 @@ def get_many(
                 next_page_getter,
                 to_dataframe,
                 log=False,
+                timeout=timeout
             )
             for endpoint, params in zip(endpoints, params_list)
         ]
@@ -177,6 +180,7 @@ def get_many(
                 "next_page_getter": next_page_getter,
                 "to_dataframe": to_dataframe,
                 "log": False,
+                "timeout": timeout
             }
             for endpoint, params in zip(endpoints, params_list)
         ]
@@ -358,6 +362,7 @@ def _get(
     next_page_getter,
     to_dataframe,
     log=True,
+    timeout=60
 ):
     # pylint:disable=too-many-arguments
     # pylint:disable=too-many-locals
@@ -372,7 +377,7 @@ def _get(
     if log:
         get_run_logger().info("REST: Sending GET to %s ...", url)
     auth = info.pop("auth", None)
-    kwargs = {"headers": info, "timeout": 60}
+    kwargs = {"headers": info, "timeout": timeout}
     if auth:
         if isinstance(auth, list):
             kwargs["auth"] = tuple(auth)
