@@ -16,6 +16,7 @@ from contextlib import contextmanager
 import asyncio
 import uuid
 
+import pandas as pd
 from prefect import task, get_run_logger, tags, context, deployments, settings
 from prefect.utilities.filesystem import create_default_ignore_file
 from prefect.filesystems import RemoteFileSystem
@@ -24,6 +25,7 @@ from prefect.blocks.system import Secret, JSON
 from prefect.client.orchestration import get_client
 import git
 import pytz
+import rpy2.robjects as ro
 
 # Overrideable settings related to deployments
 DOCKER_REGISTRY = "oit-data-services-docker-local.artifactory.colorado.edu"
@@ -367,3 +369,14 @@ def sizeof_fmt(num: int) -> str:
             return f"{num:3.1f} {unit}"
         num /= 1024.0
     return f"{num:.1f} PB"
+
+
+@task
+def run_model(data: pd.DataFrame, model_path:str) -> pd.DataFrame:
+    """Reads an R model from an RDS file and runs its associated predict method on a dataframe, returning the predictions"""
+    with (ro.default_converter + ro.pandas2ri.converter).context():
+        r_dataframe = ro.conversion.get_conversion().py2rpy(data)
+        model = ro.r.readRDS(model_path)
+        preds = ro.r.predict(model, r_dataframe)
+        pred_dataframe = ro.conversion.get_conversion().rpy2py(preds)
+    return pred_dataframe
