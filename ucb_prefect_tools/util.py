@@ -22,6 +22,7 @@ from prefect.filesystems import RemoteFileSystem
 from prefect.infrastructure import DockerContainer
 from prefect.blocks.system import Secret, JSON
 from prefect.client.orchestration import get_client
+from prefect_dask.task_runners import DaskTaskRunner
 import git
 import pytz
 
@@ -131,6 +132,10 @@ def deployable(flow_obj):
     if flow_obj.result_storage is None:
         # Terminal slash in the path is probably non-optional
         flow_obj.result_storage = _get_flow_storage(subfolder="results/")
+    if flow_obj.task_runner is None:
+        flow_obj.task_runner = (
+            DaskTaskRunner(cluster_kwargs={"n_workers": 1, "threads_per_worker": 10}),
+        )
     return flow_obj
 
 
