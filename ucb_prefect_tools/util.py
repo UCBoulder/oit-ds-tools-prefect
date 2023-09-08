@@ -121,14 +121,17 @@ def limit_concurrency(max_tasks):
         get_run_logger().info("Cleared concurrency limit for tag %s", tag)
 
 
-def deployable(flow):
+def deployable(flow_obj):
     """Decorator that modified a Prefect flow to set some standard settings. This decorator
     should be placed ABOVE the @flow decorator."""
 
-    # Terminal slash in the path is probably non-optional
-    return flow.with_options(
-        timeout_seconds=8 * 3600, result_storage=_get_flow_storage(subfolder="results/")
-    )
+    # Only set options if they weren't set previously
+    if flow_obj.timeout_seconds is None:
+        flow_obj.timeout_seconds = 8 * 3600
+    if flow_obj.result_storage is None:
+        # Terminal slash in the path is probably non-optional
+        flow_obj.result_storage = _get_flow_storage(subfolder="results/")
+    return flow_obj
 
 
 def run_flow_command_line_interface(flow_filename, flow_function_name, args=None):
