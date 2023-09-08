@@ -121,6 +121,16 @@ def limit_concurrency(max_tasks):
         get_run_logger().info("Cleared concurrency limit for tag %s", tag)
 
 
+def deployable(flow):
+    """Decorator that modified a Prefect flow to set some standard settings. This decorator
+    should be placed ABOVE the @flow decorator."""
+
+    # Terminal slash in the path is probably non-optional
+    return flow.with_options(
+        timeout_seconds=8 * 3600, result_storage=_get_flow_storage(subfolder="results/")
+    )
+
+
 def run_flow_command_line_interface(flow_filename, flow_function_name, args=None):
     """Provides a command line interface for running and deploying a flow. If args is none, will
     use sys.argv"""
@@ -277,14 +287,17 @@ def _get_flow_infrastructure(image_uri):
     )
 
 
-def _get_flow_storage():
+def _get_flow_storage(subfolder=None):
     storage_conn = reveal_secrets(JSON.load(FLOW_STORAGE_CONNECTION_BLOCK).value)
     if storage_conn["system_type"] == "minio":
         endpoint_url = storage_conn["endpoint"]
         if not endpoint_url.startswith("https://"):
             endpoint_url = "https://" + endpoint_url
+        path = f's3://{storage_conn["bucket"]}/'
+        if subfolder:
+            path = os.path.join(path, subfolder)
         return RemoteFileSystem(
-            basepath=f's3://{storage_conn["bucket"]}/',
+            basepath=path,
             settings={
                 "key": storage_conn["access_key"],
                 "secret": storage_conn["secret_key"],
