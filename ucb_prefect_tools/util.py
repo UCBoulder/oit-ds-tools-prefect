@@ -22,6 +22,7 @@ from prefect.filesystems import RemoteFileSystem
 from prefect.infrastructure import DockerContainer
 from prefect.blocks.system import Secret, JSON
 from prefect.client.orchestration import get_client
+from prefect_dask.task_runners import DaskTaskRunner
 import git
 import pytz
 
@@ -119,6 +120,23 @@ def limit_concurrency(max_tasks):
             future.wait()
         asyncio.run(_remove_concurrency_limit(tag))
         get_run_logger().info("Cleared concurrency limit for tag %s", tag)
+
+
+def deployable(flow_obj):
+    """Decorator that modified a Prefect flow to set some standard settings. This decorator
+    should be placed ABOVE the @flow decorator."""
+
+    # Only set options if they weren't set previously
+    if flow_obj.timeout_seconds is None:
+        flow_obj.timeout_seconds = 8 * 3600
+    if flow_obj.result_storage is None:
+        # Terminal slash in the path is probably non-optional
+        flow_obj.result_storage = _get_flow_storage(subfolder="results/")
+    if flow_obj.task_runner is None:
+        flow_obj.task_runner = (
+            DaskTaskRunner(cluster_kwargs={"n_workers": 1, "threads_per_worker": 10}),
+        )
+    return flow_obj
 
 
 def run_flow_command_line_interface(flow_filename, flow_function_name, args=None):
@@ -277,14 +295,17 @@ def _get_flow_infrastructure(image_uri):
     )
 
 
-def _get_flow_storage():
+def _get_flow_storage(subfolder=None):
     storage_conn = reveal_secrets(JSON.load(FLOW_STORAGE_CONNECTION_BLOCK).value)
     if storage_conn["system_type"] == "minio":
         endpoint_url = storage_conn["endpoint"]
         if not endpoint_url.startswith("https://"):
             endpoint_url = "https://" + endpoint_url
+        path = f's3://{storage_conn["bucket"]}/'
+        if subfolder:
+            path = os.path.join(path, subfolder)
         return RemoteFileSystem(
-            basepath=f's3://{storage_conn["bucket"]}/',
+            basepath=path,
             settings={
                 "key": storage_conn["access_key"],
                 "secret": storage_conn["secret_key"],
