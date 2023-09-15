@@ -7,6 +7,7 @@ supported systems:
     - "minio" for minio.Minio
     - "s3" for boto3.session.Session
     - "smb" for smb.SMBConnection
+    - "onedrive" for msal.ConfidentialClientApplication
 
 The remaining KVs of connection_info should map directly to the keyword arguments used in calling
 the constructor indicated in the list above, with some exceptions:
@@ -19,6 +20,7 @@ the constructor indicated in the list above, with some exceptions:
         "secure" is omitted, it defaults to True.
     - For smb, must include a "port" arg. The service name should be specified by the first element
         in the file path, preceded by a "/". IP address and "my_name" are automatically derived.
+    - for onedrive, must include "username" and "password" args for authentication.
 """
 
 import io
@@ -31,7 +33,6 @@ from contextlib import contextmanager
 import socket
 
 from prefect import task, get_run_logger
-from prefect.blocks.system import JSON
 import pandas as pd
 from paramiko.client import SSHClient
 from paramiko.dsskey import DSSKey
@@ -45,6 +46,8 @@ import boto3
 import botocore
 from smb.SMBConnection import SMBConnection
 from smb.base import OperationFailure
+import msal
+import requests
 
 from .util import sizeof_fmt
 
@@ -53,12 +56,11 @@ from .util import sizeof_fmt
 # General-purpose tasks and functions
 
 
-def _switch(connection_info, **kwargs):
-    for key, value in kwargs.items():
-        if connection_info["system_type"] == key:
-            del connection_info["system_type"]
-            return value
-    raise ValueError(f'System type "{connection_info["system_type"]}" is not supported')
+def _switch(info, **kwargs):
+    system_type = info.pop("system_type")
+    if system_type not in kwargs:
+        raise ValueError(f"Unsupported system type: {system_type}")
+    return kwargs[system_type]
 
 
 @task(name="object_storage.get")
@@ -67,7 +69,14 @@ def get(object_name: str, connection_info: dict) -> bytes:
     FileNotFoundError if the file could not be found."""
 
     info = connection_info.copy()
-    function = _switch(info, sftp=sftp_get, minio=minio_get, s3=s3_get, smb=smb_get)
+    function = _switch(
+        info,
+        sftp=sftp_get,
+        minio=minio_get,
+        s3=s3_get,
+        smb=smb_get,
+        onedrive=onedrive_get,
+    )
     return function(object_name, info)
 
 
@@ -82,7 +91,14 @@ def put(
     if not hasattr(binary_object, "read"):
         binary_object = io.BytesIO(binary_object)
     binary_object.seek(0)
-    function = _switch(info, sftp=sftp_put, minio=minio_put, s3=s3_put, smb=smb_put)
+    function = _switch(
+        info,
+        sftp=sftp_put,
+        minio=minio_put,
+        s3=s3_put,
+        smb=smb_put,
+        onedrive=onedrive_put,
+    )
     function(binary_object, object_name, info)
 
 
@@ -92,7 +108,12 @@ def remove(object_name: str, connection_info: dict) -> None:
 
     info = connection_info.copy()
     function = _switch(
-        info, sftp=sftp_remove, minio=minio_remove, s3=s3_remove, smb=smb_remove
+        info,
+        sftp=sftp_remove,
+        minio=minio_remove,
+        s3=s3_remove,
+        smb=smb_remove,
+        onedrive=onedrive_remove,
     )
     function(object_name, info)
 
@@ -104,7 +125,14 @@ def list_names(connection_info: dict, prefix: str = None) -> list[str]:
     """
 
     info = connection_info.copy()
-    function = _switch(info, sftp=sftp_list, minio=minio_list, s3=s3_list, smb=smb_list)
+    function = _switch(
+        info,
+        sftp=sftp_list,
+        minio=minio_list,
+        s3=s3_list,
+        smb=smb_list,
+        onedrive=onedrive_list,
+    )
     if prefix:
         return function(info, prefix)
     return function(info)
@@ -122,7 +150,14 @@ def store_dataframe(
     data = io.BytesIO()
     dataframe.to_pickle(data)
     data.seek(0)
-    function = _switch(info, sftp=sftp_put, minio=minio_put, s3=s3_put, smb=smb_put)
+    function = _switch(
+        info,
+        sftp=sftp_put,
+        minio=minio_put,
+        s3=s3_put,
+        smb=smb_put,
+        onedrive=onedrive_put,
+    )
     get_run_logger().info(
         "Storing dataframe %s with %s rows in pickle format",
         object_name,
@@ -138,7 +173,14 @@ def retrieve_dataframe(object_name: str, connection_info: dict) -> pd.DataFrame:
     """
 
     info = connection_info.copy()
-    function = _switch(info, sftp=sftp_get, minio=minio_get, s3=s3_get, smb=smb_get)
+    function = _switch(
+        info,
+        sftp=sftp_get,
+        minio=minio_get,
+        s3=s3_get,
+        smb=smb_get,
+        onedrive=onedrive_get,
+    )
     contents = function(object_name, info)
     data = io.BytesIO(contents)
     out = pd.read_pickle(data)
@@ -677,3 +719,165 @@ def smb_list(connection_info: dict, prefix: str = "./") -> list[str]:
         ]
     get_run_logger().info("SMB: Found %s files", len(out))
     return out
+
+
+# OneDrive functions
+
+
+def _get_onedrive_auth(connection_info):
+    username = connection_info.pop("username")
+    password = connection_info.pop("password")
+    app = msal.ConfidentialClientApplication(**connection_info)
+    if username:
+        app_token = app.acquire_token_by_username_password(
+            username=username,
+            password=password,
+            scopes=["User.Read", "Files.ReadWrite.All"],
+        )
+    else:
+        raise KeyError(
+            'Only username/password authentication is supported; "username" key is required'
+        )
+    if "error" in app_token:
+        raise ConnectionError(f"Authentication error: {app_token['error_description']}")
+    return username, f"Bearer {app_token['access_token']}"
+
+
+def onedrive_get(file_path: str, connection_info: dict) -> bytes:
+    """Returns the bytes content for the given file in a user's OneDrive."""
+
+    username, auth = _get_onedrive_auth(connection_info)
+    get_run_logger().info(
+        "OneDrive: Getting file %s from %s's OneDrive",
+        file_path,
+        username,
+    )
+
+    request = requests.get(
+        f"/users('{username}')/drive/root:{file_path}:/content",
+        headers={"Authorization": auth},
+        timeout=300,
+    )
+    request.raise_for_status()
+
+    get_run_logger().info("SMB: Got %s file", sizeof_fmt(len(request.content)))
+    return request.content
+
+
+def onedrive_put(
+    file_object: BinaryIO,
+    file_path: str,
+    connection_info: dict,
+) -> None:
+    """Writes a file-like object or bytes string to the given path on a user's OneDrive."""
+
+    size = file_object.seek(0, 2)
+    file_object.seek(0)
+    username, auth = _get_onedrive_auth(connection_info)
+    get_run_logger().info(
+        "OneDrive: Putting file %s (%s) on %s's Onedrive",
+        file_path,
+        sizeof_fmt(size),
+        username,
+    )
+
+    # If the file is smaller than 4MB, we can do a simple upload
+    if size <= 4 * 1024 * 1024:
+        url = (
+            f"https://graph.microsoft.com/v1.0/users('{username}')/drive"
+            f"/root:{file_path}:/content"
+        )
+        response = requests.put(
+            url,
+            headers={"Authorization": auth},
+            data=file_object.read(),
+            timeout=60,
+        )
+        response.raise_for_status()
+    else:
+        # For larger files, use the createUploadSession endpoint
+        response = requests.post(
+            f"https://graph.microsoft.com/v1.0/users('{username}')/drive/"
+            f"root:{file_path}:/createUploadSession",
+            headers={"Authorization": auth},
+            json={"item": {"@microsoft.graph.conflictBehavior": "replace"}},
+            timeout=30,
+        )
+        response.raise_for_status()
+        upload_url = response.json()["uploadUrl"]
+
+        # Fragment the file and upload in parts
+        chunk_size = 320 * 1024  # 320KB
+        start_byte = 0
+        while start_byte < size:
+            end_byte = min(start_byte + chunk_size, size) - 1
+            file_chunk = file_object.read(chunk_size)
+            chunk_headers = {
+                "Authorization": auth,
+                "Content-Range": f"bytes {start_byte}-{end_byte}/{size}",
+            }
+            chunk_response = requests.put(
+                upload_url,
+                headers=chunk_headers,
+                data=file_chunk,
+                timeout=30,
+            )
+            chunk_response.raise_for_status()
+            start_byte += chunk_size
+
+
+def onedrive_remove(file_path: str, connection_info: dict) -> None:
+    """Removes the identified file from a user's OneDrive."""
+
+    username, auth = _get_onedrive_auth(connection_info)
+    get_run_logger().info(
+        "OneDrive: Removing file %s from %s's OneDrive",
+        file_path,
+        username,
+    )
+
+    response = requests.delete(
+        f"https://graph.microsoft.com/v1.0/users('{username}')/drive/root:{file_path}",
+        headers={"Authorization": auth},
+        timeout=60,
+    )
+    response.raise_for_status()
+
+
+def onedrive_list(connection_info: dict, prefix: str = "") -> list[str]:
+    """Returns a list of filenames for files with the given path prefix.
+    Only the filenames are returned, without folder paths."""
+
+    username, auth = _get_onedrive_auth(connection_info)
+    get_run_logger().info(
+        "OneDrive: Listing files with prefix %s from %s's OneDrive",
+        prefix,
+        username,
+    )
+
+    filenames = []
+    url = (
+        f"https://graph.microsoft.com/v1.0/users('{username}')/drive"
+        f"/root:{prefix}:/children?$top=200"
+    )
+
+    while url:
+        response = requests.get(
+            url,
+            headers={"Authorization": auth},
+            timeout=60,
+        )
+        response.raise_for_status()
+
+        # Extract filenames from the response
+        filenames += [
+            item["name"]
+            for item in response.json().get("value", [])
+            if not item.get("folder")
+        ]
+
+        # Check for the nextLink to see if there are more items/pages
+        url = response.json().get("@odata.nextLink")
+
+    get_run_logger().info("OneDrive: Found %s files", len(filenames))
+    return filenames
