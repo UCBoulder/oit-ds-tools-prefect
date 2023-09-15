@@ -20,7 +20,8 @@ the constructor indicated in the list above, with some exceptions:
         "secure" is omitted, it defaults to True.
     - For smb, must include a "port" arg. The service name should be specified by the first element
         in the file path, preceded by a "/". IP address and "my_name" are automatically derived.
-    - for onedrive, must include "username" and "password" args for authentication.
+    - for onedrive, must include "username" and "password" args for authentication, and also must
+        contain an "owner" param which specifies the user who owns the OneDrive space being accessed
 """
 
 import io
@@ -725,6 +726,7 @@ def smb_list(connection_info: dict, prefix: str = "./") -> list[str]:
 
 
 def _get_onedrive_auth(connection_info):
+    owner = connection_info.pop("owner", None)
     username = connection_info.pop("username")
     password = connection_info.pop("password")
     app = msal.ConfidentialClientApplication(**connection_info)
@@ -740,21 +742,21 @@ def _get_onedrive_auth(connection_info):
         )
     if "error" in app_token:
         raise ConnectionError(f"Authentication error: {app_token['error_description']}")
-    return username, f"Bearer {app_token['access_token']}"
+    return owner, f"Bearer {app_token['access_token']}"
 
 
 def onedrive_get(file_path: str, connection_info: dict) -> bytes:
     """Returns the bytes content for the given file in a user's OneDrive."""
 
-    username, auth = _get_onedrive_auth(connection_info)
+    owner, auth = _get_onedrive_auth(connection_info)
     get_run_logger().info(
         "OneDrive: Getting file %s from %s's OneDrive",
         file_path,
-        username,
+        owner,
     )
 
     request = requests.get(
-        f"/users('{username}')/drive/root:{file_path}:/content",
+        f"/users('{owner}')/drive/root:{file_path}:/content",
         headers={"Authorization": auth},
         timeout=300,
     )
@@ -773,18 +775,18 @@ def onedrive_put(
 
     size = file_object.seek(0, 2)
     file_object.seek(0)
-    username, auth = _get_onedrive_auth(connection_info)
+    owner, auth = _get_onedrive_auth(connection_info)
     get_run_logger().info(
         "OneDrive: Putting file %s (%s) on %s's Onedrive",
         file_path,
         sizeof_fmt(size),
-        username,
+        owner,
     )
 
     # If the file is smaller than 4MB, we can do a simple upload
     if size <= 4 * 1024 * 1024:
         url = (
-            f"https://graph.microsoft.com/v1.0/users('{username}')/drive"
+            f"https://graph.microsoft.com/v1.0/users('{owner}')/drive"
             f"/root:{file_path}:/content"
         )
         response = requests.put(
@@ -797,7 +799,7 @@ def onedrive_put(
     else:
         # For larger files, use the createUploadSession endpoint
         response = requests.post(
-            f"https://graph.microsoft.com/v1.0/users('{username}')/drive/"
+            f"https://graph.microsoft.com/v1.0/users('{owner}')/drive/"
             f"root:{file_path}:/createUploadSession",
             headers={"Authorization": auth},
             json={"item": {"@microsoft.graph.conflictBehavior": "replace"}},
@@ -829,15 +831,15 @@ def onedrive_put(
 def onedrive_remove(file_path: str, connection_info: dict) -> None:
     """Removes the identified file from a user's OneDrive."""
 
-    username, auth = _get_onedrive_auth(connection_info)
+    owner, auth = _get_onedrive_auth(connection_info)
     get_run_logger().info(
         "OneDrive: Removing file %s from %s's OneDrive",
         file_path,
-        username,
+        owner,
     )
 
     response = requests.delete(
-        f"https://graph.microsoft.com/v1.0/users('{username}')/drive/root:{file_path}",
+        f"https://graph.microsoft.com/v1.0/users('{owner}')/drive/root:{file_path}",
         headers={"Authorization": auth},
         timeout=60,
     )
@@ -848,16 +850,16 @@ def onedrive_list(connection_info: dict, prefix: str = "") -> list[str]:
     """Returns a list of filenames for files with the given path prefix.
     Only the filenames are returned, without folder paths."""
 
-    username, auth = _get_onedrive_auth(connection_info)
+    owner, auth = _get_onedrive_auth(connection_info)
     get_run_logger().info(
         "OneDrive: Listing files with prefix %s from %s's OneDrive",
         prefix,
-        username,
+        owner,
     )
 
     filenames = []
     url = (
-        f"https://graph.microsoft.com/v1.0/users('{username}')/drive"
+        f"https://graph.microsoft.com/v1.0/users('{owner}')/drive"
         f"/root:{prefix}:/children?$top=200"
     )
 
