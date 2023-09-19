@@ -756,7 +756,7 @@ def onedrive_get(file_path: str, connection_info: dict) -> bytes:
     )
 
     request = requests.get(
-        f"/users('{owner}')/drive/root:{file_path}:/content",
+        f"https://graph.microsoft.com/v1.0/users('{owner}')/drive/root:{file_path}:/content",
         headers={"Authorization": auth},
         timeout=300,
     )
