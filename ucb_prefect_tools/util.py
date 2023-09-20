@@ -376,9 +376,9 @@ def sizeof_fmt(num: int) -> str:
 @task
 def run_model(data: pd.DataFrame, model_path:str) -> pd.DataFrame:
     """Reads an R model from an RDS file and runs its associated predict method on a dataframe, returning the predictions"""
-    importr("glmnet")
 
     with (ro.default_converter + pandas2ri.converter).context():
+        importr("glmnet")
         r_dataframe = ro.conversion.get_conversion().py2rpy(data)
         model = ro.r.readRDS(model_path)
         preds = ro.r.predict(model, r_dataframe)
