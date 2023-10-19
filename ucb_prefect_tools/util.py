@@ -384,7 +384,7 @@ def run_model(data: pd.DataFrame, model_path:str) -> pd.DataFrame:
         glmnet = importr('glmnet')
         stats = importr('stats')
         model = ro.r.readRDS(model_path)
-        preds = stats.predict(model[1], r_dataframe)
+        preds = stats.predict(model, r_dataframe)
 
     with (ro.default_converter + pandas2ri.converter).context():
         pred_dataframe = ro.conversion.get_conversion().rpy2py(preds)
