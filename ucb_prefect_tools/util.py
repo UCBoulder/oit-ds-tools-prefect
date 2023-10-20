@@ -374,18 +374,11 @@ def sizeof_fmt(num: int) -> str:
     return f"{num:.1f} PB"
 
 @task
-def run_model(data: pd.DataFrame, model_path:str, columns_to_factorize=[]) -> pd.DataFrame:
+def run_model(data: pd.DataFrame, model_path:str) -> pd.DataFrame:
     """Reads an R model from an RDS file and runs its associated predict method on a dataframe, returning the predictions"""
-    def _factorize(r_df, col):
-        index = list(r_df.colnames).index(col)
-        factorized_col = ro.vectors.FactorVector(r_df.rx2(col))
-        r_df[index] = factorized_col
-        return r_df
 
     with (ro.default_converter + pandas2ri.converter).context():
         r_dataframe = ro.conversion.get_conversion().py2rpy(data)
-        for column in columns_to_factorize:
-            r_dataframe = _factorize(r_dataframe, column)
 
     with (ro.default_converter).context():
         glmnet = importr('glmnet')
