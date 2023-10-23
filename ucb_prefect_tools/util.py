@@ -382,6 +382,7 @@ def run_model(data: pd.DataFrame, model_path:str) -> pd.DataFrame:
 
     with (ro.default_converter).context():
         glmnet = importr('glmnet')
+        caret = importr('caret')
         stats = importr('stats')
         model = ro.r.readRDS(model_path)
         preds = stats.predict(model, r_dataframe)
