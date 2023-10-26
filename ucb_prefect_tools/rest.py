@@ -106,7 +106,7 @@ def delete(
 
 @task(name="rest.get_many")
 def get_many(
-    endpoints: list,
+    endpoints: list[str],
     connection_info: dict,
     params_list: list[dict] = None,
     next_page_getter: Callable = None,
@@ -237,7 +237,7 @@ def get_many(
 
 @task(name="rest.post_many")
 def post_many(
-    endpoints: list,
+    endpoints: list[str],
     connection_info: dict,
     params_list: list = None,
     data_list: list = None,
@@ -267,7 +267,7 @@ def post_many(
 
 @task(name="rest.put_many")
 def put_many(
-    endpoints: list,
+    endpoints: list[str],
     connection_info: dict,
     params_list: list = None,
     data_list: list = None,
@@ -297,7 +297,7 @@ def put_many(
 
 @task(name="rest.patch_many")
 def patch_many(
-    endpoints: list,
+    endpoints: list[str],
     connection_info: dict,
     params_list: list = None,
     data_list: list = None,
@@ -327,7 +327,7 @@ def patch_many(
 
 @task(name="rest.delete_many")
 def delete_many(
-    endpoints: list,
+    endpoints: list[str],
     connection_info: dict,
     params_list: list = None,
     data_list: list = None,

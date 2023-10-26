@@ -75,7 +75,7 @@ def insert(
     dataframe: pd.DataFrame,
     table_identifier: str,
     connection_info: dict,
-    pre_insert_statements: list = None,
+    pre_insert_statements: list[str] = None,
     pre_insert_params: list = None,
     max_error_proportion: float = 0.05,
 ) -> pd.DataFrame:
@@ -118,7 +118,7 @@ def update(
     table_identifier: str,
     match_on: list,
     connection_info: dict,
-    pre_update_statements: list = None,
+    pre_update_statements: list[str] = None,
     pre_update_params: list = None,
     max_error_proportion: float = 0.05,
 ) -> pd.DataFrame:
@@ -307,7 +307,7 @@ def oracle_insert(
     dataframe: pd.DataFrame,
     table_identifier: str,
     connection_info: dict,
-    pre_insert_statements: list = None,
+    pre_insert_statements: list[str] = None,
     pre_insert_params: list = None,
     max_error_proportion: float = 0.05,
 ) -> pd.DataFrame:
@@ -392,7 +392,7 @@ def oracle_update(
     table_identifier: str,
     match_on: list,
     connection_info: dict,
-    pre_update_statements: list = None,
+    pre_update_statements: list[str] = None,
     pre_update_params: list = None,
     max_error_proportion: float = 0.05,
 ) -> pd.DataFrame:
@@ -614,7 +614,7 @@ def get_insert(system_type, connection_func):
         dataframe: pd.DataFrame,
         table_identifier: str,
         connection_info: dict,
-        pre_insert_statements: list = None,
+        pre_insert_statements: list[str] = None,
         pre_insert_params: list = None,
         max_error_proportion: float = 0.05,
     ) -> pd.DataFrame:
@@ -727,7 +727,7 @@ def get_update(system_type, connection_func):
         table_identifier: str,
         match_on: list,
         connection_info: dict,
-        pre_update_statements: list = None,
+        pre_update_statements: list[str] = None,
         pre_update_params: list = None,
         max_error_proportion: float = 0.05,
     ) -> pd.DataFrame:

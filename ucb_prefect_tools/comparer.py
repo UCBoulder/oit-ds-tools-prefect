@@ -166,7 +166,7 @@ def compare(left: pd.DataFrame, right: pd.DataFrame) -> dict:
 
 
 def bulk_compare(
-    left_filepaths: list, right_filepaths: list, df_loader: Callable
+    left_filepaths: list[str], right_filepaths: list[str], df_loader: Callable
 ) -> pd.DataFrame:
     """Compares left files with right files in order, loading the files into DataFrames using the
     df_loader callable. Returns a DataFrame with columns filename, measure, value giving the metrics
