@@ -98,7 +98,7 @@ def remove(object_name: str, connection_info: dict) -> None:
 
 
 @task(name="object_storage.list_names")
-def list_names(connection_info: dict, prefix: str = None) -> list[str]:
+def list_names(connection_info: dict, prefix: str = None) -> list:
     """Returns a list of object or file names in the given folder. Filters by object name prefix,
     which includes directory path for file systems. Folders are not included; non-recursive.
     """
@@ -303,7 +303,7 @@ def sftp_remove(file_path: str, connection_info: dict) -> None:
         sftp.remove(file_path)
 
 
-def sftp_list(connection_info: dict, file_prefix: str = "./") -> list[str]:
+def sftp_list(connection_info: dict, file_prefix: str = "./") -> list:
     """Returns a list of filenames for files with the given path prefix. Only the filenames are
     returned, without folder paths."""
 
@@ -405,7 +405,7 @@ def minio_remove(object_name: str, connection_info: dict) -> None:
     minio.remove_object(bucket, object_name)
 
 
-def minio_list(connection_info: dict, prefix: str = "") -> list[str]:
+def minio_list(connection_info: dict, prefix: str = "") -> list:
     """Returns a list of object names with the given prefix in a Minio bucket; non-recursive."""
 
     if "secure" not in connection_info:
@@ -505,7 +505,7 @@ def s3_remove(object_key: str, connection_info: dict, VersionId: str = None) -> 
     obj.delete(VersionId=VersionId)
 
 
-def s3_list(connection_info: dict, Prefix: str = "") -> list[str]:
+def s3_list(connection_info: dict, Prefix: str = "") -> list:
     """Returns a list of object names with the given prefix in an Amazon S3 bucket;
     non-recursive."""
 
@@ -640,7 +640,7 @@ def smb_remove(file_path: str, connection_info: dict) -> None:
         conn.deleteFiles(service_name, file_path)
 
 
-def smb_list(connection_info: dict, prefix: str = "./") -> list[str]:
+def smb_list(connection_info: dict, prefix: str = "./") -> list:
     """Returns a list of filenames for files with the given path prefix. Only the filenames are
     returned, without folder paths."""
 
