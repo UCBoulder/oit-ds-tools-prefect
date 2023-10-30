@@ -1,3 +1,6 @@
+"""This module requires the library rpy2 to be installed to run. This is not listed as a requirement for the package,
+to avoid a mandatory R installation to run the remaining tools."""
+
 import pandas as pd
 import rpy2.robjects as ro
 from rpy2.robjects.packages import importr
