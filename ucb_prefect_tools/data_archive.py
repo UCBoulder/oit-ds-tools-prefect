@@ -28,6 +28,7 @@ from prefect.blocks.system import JSON
 import dateutil
 
 from .object_storage import get, put
+from . import util
 
 ARCHIVE_STORAGE_BLOCK = "ds-prod-storage"
 
@@ -45,32 +46,15 @@ def get_new_rows(
     """Returns rows which are in dataframe which are not found in the identified archived dataset
     based only on the match_on columns."""
 
-    # Load connection info from JSON block
-    connection_info = JSON.load(ARCHIVE_STORAGE_BLOCK).value
-
-    # Retrieve the archived dataset
-    with disable_run_logger():
-        archive_bytes = get.fn(archive_path, connection_info=connection_info)
-    if not archive_bytes:  # If archive is empty
+    archive_df = get_data(archive_path)
+    if archive_df.empty:
         get_run_logger().info(
             "data_archive: Found %s new rows compared to empty archive at %s",
             len(dataframe),
             archive_path,
         )
         return dataframe
-
-    archive_df = pd.read_pickle(io.BytesIO(archive_bytes))
-    archive_df = archive_df[
-        archive_df["archive_deleted_at"].isna()
-    ]  # Consider only non-deleted rows
-
-    # If no columns are specified for matching, use all columns except the archive-specific ones
-    if match_on is None:
-        match_on = [
-            col
-            for col in dataframe.columns
-            if col not in ["archive_last_updated_at", "archive_deleted_at"]
-        ]
+    match_on = _match_columns(dataframe, archive_df, match_on)
 
     # Merging the provided dataframe with the archive
     merged_df = pd.merge(dataframe, archive_df, on=match_on, how="left", indicator=True)
@@ -101,31 +85,14 @@ def get_changed_rows(
     based on the match_on columns, BUT which differ according to any of the other columns. If
     match_on is None (default), matches on all columns."""
 
-    # Load connection info from JSON block
-    connection_info = JSON.load(ARCHIVE_STORAGE_BLOCK).value
-
-    # Retrieve the archived dataset
-    with disable_run_logger():
-        archive_bytes = get.fn(archive_path, connection_info=connection_info)
-    if not archive_bytes:  # If archive is empty
+    archive_df = get_data(archive_path)
+    if archive_df.empty:
         get_run_logger().info(
             "data_archive: Found 0 changed rows compared to empty archive at %s",
             archive_path,
         )
-        return pd.DataFrame()
-
-    archive_df = pd.read_pickle(io.BytesIO(archive_bytes))
-    archive_df = archive_df[
-        archive_df["archive_deleted_at"].isna()
-    ]  # Consider only non-deleted rows
-
-    # If no columns are specified for matching, use all columns except the archive-specific ones
-    if match_on is None:
-        match_on = [
-            col
-            for col in dataframe.columns
-            if col not in ["archive_last_updated_at", "archive_deleted_at"]
-        ]
+        return dataframe.iloc[:0]
+    match_on = _match_columns(dataframe, archive_df, match_on)
 
     # Merging the provided dataframe with the archive
     merged_df = pd.merge(
@@ -161,31 +128,14 @@ def get_dropped_rows(
     """Returns rows which are NOT in dataframe which are in the identified archived dataset
     based on the match_on columns. If match_on is None (default), matches on all columns."""
 
-    # Load connection info from JSON block
-    connection_info = JSON.load(ARCHIVE_STORAGE_BLOCK).value
-
-    # Retrieve the archived dataset
-    with disable_run_logger():
-        archive_bytes = get.fn(archive_path, connection_info=connection_info)
-    if not archive_bytes:  # If archive is empty
+    archive_df = get_data(archive_path)
+    if archive_df.empty:
         get_run_logger().info(
             "data_archive: Found 0 dropped rows compared to empty archive at %s",
             archive_path,
         )
-        return pd.DataFrame()
-
-    archive_df = pd.read_pickle(io.BytesIO(archive_bytes))
-    archive_df = archive_df[
-        archive_df["archive_deleted_at"].isna()
-    ]  # Consider only non-deleted rows
-
-    # If no columns are specified for matching, use all columns except the archive-specific ones
-    if match_on is None:
-        match_on = [
-            col
-            for col in dataframe.columns
-            if col not in ["archive_last_updated_at", "archive_deleted_at"]
-        ]
+        return dataframe.iloc[:0]
+    match_on = _match_columns(dataframe, archive_df, match_on)
 
     # Merging the archived dataframe with the provided dataframe
     merged_df = pd.merge(archive_df, dataframe, on=match_on, how="left", indicator=True)
@@ -210,27 +160,21 @@ def update_archive(dataframe: pd.DataFrame, archive_path: str) -> None:
     archive_deleted_at value to now. In other words, the "current state" of the archive is
     modified to match `dataframe`."""
 
-    # Load connection info from JSON block
-    connection_info = JSON.load(ARCHIVE_STORAGE_BLOCK).value
-
-    # Retrieve the archived dataset
-    with disable_run_logger():
-        archive_bytes = get.fn(archive_path, connection_info=connection_info)
-    if archive_bytes:
-        archive_df = pd.read_pickle(io.BytesIO(archive_bytes))
-    else:
+    archive_df = get_data(archive_path, include_timestamps=True, include_deleted=True)
+    if archive_df.empty:
         # Initialize empty archive with same columns as dataframe plus archive-specific columns
         archive_df = pd.DataFrame(
             columns=list(dataframe.columns)
             + ["archive_last_updated_at", "archive_deleted_at"]
         )
+    current_archive = archive_df[archive_df["archive_deleted_at"].isna()]
 
-    current_time = datetime.datetime.now(
-        tz=datetime.timezone(datetime.timedelta(hours=-7))
-    )  # America/Denver timezone
+    current_time = util.now()
+
+    # TODO: this logic is probably messed up because it doesn't respect the difference between archive_df and current_archive...
 
     # Mark rows in the archive that are not present in the dataframe as deleted
-    merged_df = pd.merge(archive_df, dataframe, how="left", indicator=True)
+    merged_df = pd.merge(current_archive, dataframe, how="left", indicator=True)
     merged_df.loc[
         merged_df["_merge"] == "left_only", "archive_deleted_at"
     ] = current_time
@@ -251,7 +195,7 @@ def update_archive(dataframe: pd.DataFrame, archive_path: str) -> None:
         data = io.BytesIO()
         updated_archive.to_pickle(data)
         data.seek(0)
-        put.fn(data, archive_path, connection_info)
+        put.fn(data, archive_path, JSON.load(ARCHIVE_STORAGE_BLOCK).value)
 
     get_run_logger().info(
         "data_archive: Updated archive at %s with %s new rows and marked %s rows as deleted",
@@ -266,25 +210,46 @@ def update_archive(dataframe: pd.DataFrame, archive_path: str) -> None:
 #####
 
 
-def get_data(archive_path: str, as_of: str = None) -> pd.DataFrame:
+def get_data(
+    archive_path: str,
+    as_of: str = None,
+    include_timestamps: bool = False,
+    include_deleted: bool = False,
+) -> pd.DataFrame:
     """Returns a snapshot of the archive dataset based on a date or datetime given by `as_of`,
     which should parse to a date/datetime. Then this returns all rows with archive_last_updated_at
-    less than as_of and archive_deleted_at greater than as_of or null."""
+    less than as_of and archive_deleted_at greater than as_of or null. If `as_of` is None (default),
+    returns the current dataset. If `include_timestamps` is True, the archive_last_updated_at and
+    archive_deleted_at columns are included. If `include_deleted` is True, returns all rows of the
+    archive, including deleted (`as_of` is ignored in this case)."""
 
-    # Load connection info from JSON block
+    # Retrieve the archived dataset
     connection_info = JSON.load(ARCHIVE_STORAGE_BLOCK).value
-
     with disable_run_logger():
-        # Retrieve the archived dataset
         archive_bytes = get.fn(archive_path, connection_info=connection_info)
 
+    # Treat empty file as an empty archive
     if not archive_bytes:
-        print(f"data_archive: No data found in archive at {archive_path}")
+        if include_timestamps:
+            return pd.DataFrame(
+                data=[], columns=["archive_last_updated_at", "archive_deleted_at"]
+            )
         return pd.DataFrame()
 
     archive_df = pd.read_pickle(io.BytesIO(archive_bytes))
 
-    # Parse the as_of date if provided
+    if include_timestamps:
+        final_columns = archive_df.columns.tolist()
+    else:
+        final_columns = [
+            i
+            for i in archive_df.columns
+            if i not in ["archive_last_updated_at", "archive_deleted_at"]
+        ]
+
+    if include_deleted:
+        return archive_df[final_columns]
+
     if as_of:
         as_of_datetime = dateutil.parser.parse(as_of)
         # Filter for rows valid as of the specified date
@@ -295,48 +260,42 @@ def get_data(archive_path: str, as_of: str = None) -> pd.DataFrame:
                 | (archive_df["archive_deleted_at"].isna())
             )
         ]
-        print(
-            f"data_archive: Retrieved data as of {as_of} from archive at {archive_path}"
-        )
-    else:
-        print(f"data_archive: Retrieved latest data from archive at {archive_path}")
+        return archive_df[final_columns]
 
-    return archive_df
+    # Otherwise, filter out deleted rows to get the current dataset
+    return archive_df[archive_df["archive_deleted_at"].isna()][final_columns]
 
 
 def info(archive_path: str) -> str:
     """Returns a string summarizing information about the given archive dataset, such as current
     length, length of the archive, etc."""
 
-    # Load connection info from JSON block
-    connection_info = JSON.load(ARCHIVE_STORAGE_BLOCK).value
-
-    with disable_run_logger():
-        # Retrieve the archived dataset
-        archive_bytes = get.fn(archive_path, connection_info=connection_info)
-
-    if not archive_bytes:
-        print(f"data_archive: No data found in archive at {archive_path}")
-        return "No data found in the specified archive."
-
-    archive_df = pd.read_pickle(io.BytesIO(archive_bytes))
+    archive_df = get_data(archive_path, include_timestamps=True, include_deleted=True)
 
     # Calculate various statistics for the archive
     current_length = len(archive_df[archive_df["archive_deleted_at"].isna()])
     total_length = len(archive_df)
-    last_updated = archive_df["archive_last_updated_at"].max()
+    last_updated = max(
+        archive_df["archive_last_updated_at"].max(),
+        archive_df["archive_deleted_at"].max(),
+    )
+    first_updated = min(
+        archive_df["archive_last_updated_at"].min(),
+        archive_df["archive_deleted_at"].min(),
+    )
 
     info_string = (
         f"Archive Path: {archive_path}\n"
         f"Current Length (excluding deleted): {current_length}\n"
         f"Total Length (including deleted): {total_length}\n"
         f"Last Updated At: {last_updated}"
+        f"Oldest Record: {first_updated}"
     )
 
-    print(f"data_archive: Information retrieved for archive at {archive_path}")
     return info_string
 
 
+# TODO: continue checking and fixing code from here until the util functions
 def undo_changes(
     archive_path: str, start_at: str = None, end_at: str = None, commit: bool = False
 ) -> None:
@@ -427,3 +386,22 @@ def init(archive_path: str, overwrite: bool = False) -> None:
         with disable_run_logger():
             put.fn(b"", archive_path, connection_info)
         print(f"data_archive: Initialized empty archive at {archive_path}")
+
+
+#####
+# Utility functions
+#####
+
+
+def _match_columns(dataframe, archive, match_on):
+    # If no columns are specified for matching, use all columns except the archive-specific ones
+    if match_on is None:
+        archive_cols = sorted(archive.columns.tolist())
+        new_cols = sorted(dataframe.columns.tolist())
+        if archive_cols != new_cols:
+            raise ValueError(
+                f"Dataframe columns do not match archived columns:\nDataframe: {new_cols}\n"
+                f"Archived: {archive_cols}"
+            )
+        return new_cols
+    return match_on
