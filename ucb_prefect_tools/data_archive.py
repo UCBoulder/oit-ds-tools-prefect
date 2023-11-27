@@ -25,12 +25,18 @@ import pandas as pd
 from prefect import task, get_run_logger
 from prefect.logging import disable_run_logger
 from prefect.blocks.system import JSON
-import dateutil
+from dateutil import parser
+import pytz
 
 from .object_storage import get, put
 from . import util
 
-ARCHIVE_STORAGE_BLOCK = "ds-prod-storage"
+
+def archive_storage():
+    """Returns the json connection info for the archive storage system"""
+
+    return util.reveal_secrets(JSON.load("ds-prod-storage").value)
+
 
 #####
 # Tasks to use within Prefect Flows
@@ -57,15 +63,12 @@ def get_new_rows(
     match_on = _match_columns(dataframe, archive_df, match_on)
 
     # Merging the provided dataframe with the archive
-    merged_df = pd.merge(dataframe, archive_df, on=match_on, how="left", indicator=True)
+    merged_df = pd.merge(
+        dataframe, archive_df[match_on], on=match_on, how="left", indicator=True
+    )
 
     # Filtering to get new rows
-    new_rows = merged_df[merged_df["_merge"] == "left_only"]
-    new_rows = new_rows.drop(
-        columns=[
-            col for col in new_rows.columns if col.endswith("_y") or col == "_merge"
-        ]
-    )
+    new_rows = merged_df[merged_df["_merge"] == "left_only"].drop(columns="_merge")
 
     get_run_logger().info(
         "data_archive: Found %s new rows compared to archived dataset at %s",
@@ -79,11 +82,11 @@ def get_new_rows(
 def get_changed_rows(
     dataframe: pd.DataFrame,
     archive_path: str,
-    match_on: list = None,
+    match_on: list,
 ) -> pd.DataFrame:
     """Returns rows which are in dataframe which ARE found in the identified archived dataset
-    based on the match_on columns, BUT which differ according to any of the other columns. If
-    match_on is None (default), matches on all columns."""
+    based on the match_on columns, BUT which differ according to any of the other columns. In this
+    case, match_on is required."""
 
     archive_df = get_data(archive_path)
     if archive_df.empty:
@@ -95,9 +98,7 @@ def get_changed_rows(
     match_on = _match_columns(dataframe, archive_df, match_on)
 
     # Merging the provided dataframe with the archive
-    merged_df = pd.merge(
-        dataframe, archive_df, on=match_on, how="inner", indicator=True
-    )
+    merged_df = pd.merge(dataframe, archive_df, on=match_on, how="inner")
 
     # Filtering to find changed rows
     changed_rows = merged_df[
@@ -109,7 +110,12 @@ def get_changed_rows(
         )
         .any(axis=1)
     ]
-    changed_rows = changed_rows.loc[:, ~changed_rows.columns.str.endswith("_y")]
+    changed_rows = changed_rows.drop(
+        columns=[i for i in changed_rows.columns if i.endswith("_y")]
+    )
+    changed_rows = changed_rows.rename(
+        columns=lambda x: x[:-2] if x.endswith("_x") else x
+    )
 
     get_run_logger().info(
         "data_archive: Found %s changed rows compared to archived dataset at %s",
@@ -138,11 +144,12 @@ def get_dropped_rows(
     match_on = _match_columns(dataframe, archive_df, match_on)
 
     # Merging the archived dataframe with the provided dataframe
-    merged_df = pd.merge(archive_df, dataframe, on=match_on, how="left", indicator=True)
+    merged_df = pd.merge(
+        archive_df, dataframe[match_on], on=match_on, how="left", indicator=True
+    )
 
     # Filtering to find dropped rows
-    dropped_rows = merged_df[merged_df["_merge"] == "left_only"]
-    dropped_rows = dropped_rows.loc[:, ~dropped_rows.columns.str.endswith("_y")]
+    dropped_rows = merged_df[merged_df["_merge"] == "left_only"].drop(columns="_merge")
 
     get_run_logger().info(
         "data_archive: Found %s dropped rows compared to provided dataset at %s",
@@ -153,13 +160,16 @@ def get_dropped_rows(
 
 
 @task
-def update_archive(dataframe: pd.DataFrame, archive_path: str) -> None:
+def update_archive(
+    dataframe: pd.DataFrame, archive_path: str, dt_override=None
+) -> None:
     """Adds any new rows from `dataframe` which do not completely match existing rows in the
     identified archived dataset with an archive_last_updated_at value of now. For rows in the
     archive which do not completely match any rows in `dataframe`, sets their
     archive_deleted_at value to now. In other words, the "current state" of the archive is
-    modified to match `dataframe`."""
+    modified to match `dataframe`. `dt_override` is just used for unit testing."""
 
+    # Get full archive
     archive_df = get_data(archive_path, include_timestamps=True, include_deleted=True)
     if archive_df.empty:
         # Initialize empty archive with same columns as dataframe plus archive-specific columns
@@ -167,41 +177,58 @@ def update_archive(dataframe: pd.DataFrame, archive_path: str) -> None:
             columns=list(dataframe.columns)
             + ["archive_last_updated_at", "archive_deleted_at"]
         )
-    current_archive = archive_df[archive_df["archive_deleted_at"].isna()]
+    # Prep data
+    current_archive = archive_df[pd.isnull(archive_df["archive_deleted_at"])]
+    columns = _match_columns(
+        dataframe,
+        current_archive.drop(columns=["archive_last_updated_at", "archive_deleted_at"]),
+    )
+    history = archive_df[~archive_df["archive_deleted_at"].isna()]
+    current_time = util.now() if not dt_override else dt_override
 
-    current_time = util.now()
+    # Get rows from the current archive and mark them deleted if they aren't in the new dataframe
+    deleted_or_unchanged = pd.merge(
+        current_archive,
+        dataframe,
+        how="left",
+        on=columns,
+        indicator=True,
+    )
+    deleted_rows = deleted_or_unchanged[
+        deleted_or_unchanged["_merge"] == "left_only"
+    ].drop(columns="_merge")
+    deleted_rows["archive_deleted_at"] = current_time
 
-    # TODO: this logic is probably messed up because it doesn't respect the difference between archive_df and current_archive...
-
-    # Mark rows in the archive that are not present in the dataframe as deleted
-    merged_df = pd.merge(current_archive, dataframe, how="left", indicator=True)
-    merged_df.loc[
-        merged_df["_merge"] == "left_only", "archive_deleted_at"
-    ] = current_time
+    unchanged_rows = deleted_or_unchanged[
+        deleted_or_unchanged["_merge"] == "both"
+    ].drop(columns="_merge")
 
     # Find new rows to add to the archive
-    new_rows = pd.merge(dataframe, archive_df, how="left", indicator=True)
-    new_rows = new_rows[new_rows["_merge"] == "left_only"].drop(columns="_merge")
-    new_rows["archive_last_updated_at"] = current_time
-    new_rows["archive_deleted_at"] = pd.NA
-
-    # Combine updated archive rows with new rows
-    updated_archive = pd.concat(
-        [merged_df[merged_df["_merge"] != "left_only"], new_rows]
+    new_rows = pd.merge(
+        current_archive, dataframe, how="right", on=columns, indicator=True
     )
+    new_rows = new_rows[new_rows["_merge"] == "right_only"].drop(columns="_merge")
+    new_rows["archive_last_updated_at"] = current_time
+    new_rows["archive_deleted_at"] = None
+
+    # Combine all back into a complete archive
+    full_updated_archive = pd.concat(
+        [new_rows, unchanged_rows, deleted_rows, history], ignore_index=True
+    )
+    print(full_updated_archive)
 
     # Store the updated archive
     with disable_run_logger():
         data = io.BytesIO()
-        updated_archive.to_pickle(data)
+        full_updated_archive.to_pickle(data)
         data.seek(0)
-        put.fn(data, archive_path, JSON.load(ARCHIVE_STORAGE_BLOCK).value)
+        put.fn(data, archive_path, archive_storage())
 
     get_run_logger().info(
         "data_archive: Updated archive at %s with %s new rows and marked %s rows as deleted",
         archive_path,
         len(new_rows),
-        len(merged_df[merged_df["_merge"] == "left_only"]),
+        len(deleted_rows),
     )
 
 
@@ -224,9 +251,8 @@ def get_data(
     archive, including deleted (`as_of` is ignored in this case)."""
 
     # Retrieve the archived dataset
-    connection_info = JSON.load(ARCHIVE_STORAGE_BLOCK).value
     with disable_run_logger():
-        archive_bytes = get.fn(archive_path, connection_info=connection_info)
+        archive_bytes = get.fn(archive_path, archive_storage())
 
     # Treat empty file as an empty archive
     if not archive_bytes:
@@ -251,12 +277,12 @@ def get_data(
         return archive_df[final_columns]
 
     if as_of:
-        as_of_datetime = dateutil.parser.parse(as_of)
+        as_of = _parse_to_denver_time(as_of)
         # Filter for rows valid as of the specified date
         archive_df = archive_df[
-            (archive_df["archive_last_updated_at"] <= as_of_datetime)
+            (archive_df["archive_last_updated_at"] <= as_of)
             & (
-                (archive_df["archive_deleted_at"] > as_of_datetime)
+                (archive_df["archive_deleted_at"] > as_of)
                 | (archive_df["archive_deleted_at"].isna())
             )
         ]
@@ -295,68 +321,58 @@ def info(archive_path: str) -> str:
     return info_string
 
 
-# TODO: continue checking and fixing code from here until the util functions
 def undo_changes(
     archive_path: str, start_at: str = None, end_at: str = None, commit: bool = False
 ) -> None:
-    """Removes rows from the archive which have archive_last_updated_at or archive_deleted_at
-    between the given datetimes (which should be given as parsable strings). If commit is False
+    """Rolls back changes in the archive that occurred between the given timestamps. This means that
+    anything updated within this time will be dropped, and anything deleted in this time will have
+    its delete timestamp removed while preserved its last updated timestamp. If commit is False
     (default), then just prints a summary of how many updates and deletes will be rolled back."""
 
-    # Load connection info from JSON block
-    connection_info = JSON.load(ARCHIVE_STORAGE_BLOCK).value
+    archive_df = get_data(archive_path, include_timestamps=True, include_deleted=True)
 
-    with disable_run_logger():
-        # Retrieve the archived dataset
-        archive_bytes = get.fn(archive_path, connection_info=connection_info)
-
-    if not archive_bytes:
-        print(f"data_archive: No data found in archive at {archive_path}")
+    if archive_df.empty:
+        print(f"No data found in archive at {archive_path}")
         return
 
-    archive_df = pd.read_pickle(io.BytesIO(archive_bytes))
-
     # Parse the start_at and end_at dates
-    if start_at:
-        start_at_datetime = dateutil.parser.parse(start_at)
-    else:
-        start_at_datetime = datetime.datetime.min
+    start_at = _parse_to_denver_time(start_at, default=datetime.datetime.min)
+    end_at = _parse_to_denver_time(end_at, default=datetime.datetime.max)
 
-    if end_at:
-        end_at_datetime = dateutil.parser.parse(end_at)
-    else:
-        end_at_datetime = datetime.datetime.max
-
-    # Filter for rows to be rolled back
-    rows_to_undo = archive_df[
-        (
-            (archive_df["archive_last_updated_at"] >= start_at_datetime)
-            & (archive_df["archive_last_updated_at"] <= end_at_datetime)
-        )
-        | (
-            (archive_df["archive_deleted_at"] >= start_at_datetime)
-            & (archive_df["archive_deleted_at"] <= end_at_datetime)
-        )
-    ]
+    # Set up filter for dropping rows added during the window
+    undo_adds = (archive_df["archive_last_updated_at"] >= start_at) & (
+        archive_df["archive_last_updated_at"] <= end_at
+    )
+    # Set up filter for removing delete timestamps during the window
+    undo_deletes = (
+        (archive_df["archive_deleted_at"] >= start_at)
+        & (archive_df["archive_deleted_at"] <= end_at)
+        # Some rows may have been added AND deleted within the window. For these, just drop them
+        # without undoing the delete timestamp: this mainly just matters for accurate counting
+        & ~undo_adds
+    )
 
     if commit:
-        # Remove the rows to be undone from the archive
-        archive_df = archive_df.drop(rows_to_undo.index)
+        # Remove delete timestamps from deleted rows
+        archive_df.loc[undo_deletes, "archive_deleted_at"] = None
+        # Remove updated rows
+        archive_df = archive_df[~undo_adds]
 
         with disable_run_logger():
             # Update the archive
             data = io.BytesIO()
             archive_df.to_pickle(data)
             data.seek(0)
-            put.fn(data, archive_path, connection_info)
+            put.fn(data, archive_path, archive_storage())
 
         print(
-            f"data_archive: Rolled back {len(rows_to_undo)} changes in archive at {archive_path}"
+            f"Rolled back {sum(undo_adds)} updates and {sum(undo_deletes)} deletes in"
+            f" archive at {archive_path}"
         )
     else:
         print(
-            f"data_archive: Found {len(rows_to_undo)} changes to be rolled back in archive at "
-            f"{archive_path}"
+            f"Found {sum(undo_adds)} updates and {sum(undo_deletes)} deletes to be rolled back in "
+            f"archive at {archive_path}. To commit these changes, re-run with `commit=True`."
         )
 
 
@@ -366,26 +382,18 @@ def init(archive_path: str, overwrite: bool = False) -> None:
     and a file already exists at `archive_path`, then prints the results of `info` for it instead
     of replacing it with an empty file."""
 
-    # Load connection info from JSON block
-    connection_info = JSON.load(ARCHIVE_STORAGE_BLOCK).value
+    archive_df = get_data(archive_path, include_deleted=True)
 
-    with disable_run_logger():
-        # Check if the archive already exists
-        archive_bytes = get.fn(archive_path, connection_info=connection_info)
-
-    if archive_bytes and not overwrite:
+    if not archive_df.empty and not overwrite:
         # If archive exists and overwrite is False, print info about the existing archive
-        existing_info = info(
-            archive_path
-        )  # Assuming 'info' function is defined in the same module
         print(
-            f"data_archive: Archive already exists at {archive_path}. Here is its current info:\n"
-            f"{existing_info}"
+            f"Archive already exists:\n{info(archive_path)}\n\nTo reset to empty archive, "
+            "re-run with `overwrite=True`."
         )
     else:
         with disable_run_logger():
-            put.fn(b"", archive_path, connection_info)
-        print(f"data_archive: Initialized empty archive at {archive_path}")
+            put.fn(b"", archive_path, archive_storage())
+        print(f"Initialized empty archive at {archive_path}")
 
 
 #####
@@ -393,15 +401,46 @@ def init(archive_path: str, overwrite: bool = False) -> None:
 #####
 
 
-def _match_columns(dataframe, archive, match_on):
+def _match_columns(dataframe, archive, match_on=None):
     # If no columns are specified for matching, use all columns except the archive-specific ones
     if match_on is None:
         archive_cols = sorted(archive.columns.tolist())
         new_cols = sorted(dataframe.columns.tolist())
         if archive_cols != new_cols:
             raise ValueError(
-                f"Dataframe columns do not match archived columns:\nDataframe: {new_cols}\n"
-                f"Archived: {archive_cols}"
+                f"Dataframe columns do not match archived columns: Dataframe - {new_cols}"
+                f" - Archived: {archive_cols}"
             )
-        return new_cols
-    return match_on
+        columns = new_cols
+    else:
+        columns = match_on
+    # After identifying columns, ensure there are no duplicates on those columns
+    dataframe_dupes = sum(dataframe[columns].duplicated())
+    archive_dupes = sum(archive[columns].duplicated())
+    if dataframe_dupes or archive_dupes:
+        raise ValueError(
+            f"Cannot match current dataset with archive on {columns} due to duplicate values. "
+            f"Current dataframe has {dataframe_dupes} duplicate values and archive "
+            f"has {archive_dupes}."
+        )
+    return columns
+
+
+def _parse_to_denver_time(date_str, default=None):
+    if date_str is None:
+        return default
+
+    timestamp = parser.parse(date_str)
+    denver_tz = pytz.timezone("America/Denver")
+
+    # If the datetime object is timezone aware, convert to America/Denver time
+    if (
+        timestamp.tzinfo is not None
+        and timestamp.tzinfo.utcoffset(timestamp) is not None
+    ):
+        timestamp = timestamp.astimezone(denver_tz)
+    else:
+        # If it's naive, assume it's in America/Denver time
+        timestamp = denver_tz.localize(timestamp)
+
+    return timestamp
