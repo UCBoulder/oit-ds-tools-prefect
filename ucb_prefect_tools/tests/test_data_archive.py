@@ -10,6 +10,7 @@ from ucb_prefect_tools import data_archive, object_storage
 
 # pylint:disable=protected-access
 # pylint:disable=redefined-outer-name
+to_dt = data_archive._parse_to_denver_time
 
 
 def assert_dataframes_are_equal(left, right):
@@ -26,14 +27,12 @@ def sample_archive():
 
     # Current state include Bob and Charlie and Alice being deleted
     dataframe = pd.DataFrame(
-        {
-            "name": ["Alice", "Bob", "Charlie"],
-            "age": [25, 30, 35],
-            "archive_last_updated_at": [
-                pd.Timestamp(i) for i in ["2023-01-01", "2023-01-02", "2023-01-03"]
-            ],
-            "archive_deleted_at": [pd.Timestamp("2023-01-03"), None, None],
-        }
+        columns=["name", "age", "archive_last_updated_at", "archive_deleted_at"],
+        data=[
+            ["Alice", 25, to_dt("2023-01-01"), to_dt("2023-01-03")],
+            ["Bob", 30, to_dt("2023-01-02"), pd.NaT],
+            ["Charlie", 35, to_dt("2023-01-03"), pd.NaT],
+        ],
     )
     data = io.BytesIO()
     dataframe.to_pickle(data)
@@ -117,7 +116,9 @@ def test_update_archive(sample_archive):
     # Update the archive and then download it to check it
     with disable_run_logger():
         data_archive.update_archive.fn(
-            dataframe, sample_archive, dt_override=pd.Timestamp("2023-01-04")
+            dataframe,
+            sample_archive,
+            dt_override=to_dt("2023-01-04"),
         )
         archive_bytes = object_storage.get.fn(
             sample_archive, data_archive.archive_storage()
@@ -129,14 +130,140 @@ def test_update_archive(sample_archive):
     expected_results = pd.DataFrame(
         columns=["name", "age", "archive_last_updated_at", "archive_deleted_at"],
         data=[
-            ["Alice", 25, pd.Timestamp("2023-01-04"), None],
-            ["Bob", 31, pd.Timestamp("2023-01-04"), None],
-            ["Darlene", 40, pd.Timestamp("2023-01-04"), None],
-            ["Bob", 30, pd.Timestamp("2023-01-02"), pd.Timestamp("2023-01-04")],
-            ["Charlie", 35, pd.Timestamp("2023-01-03"), pd.Timestamp("2023-01-04")],
-            ["Alice", 25, pd.Timestamp("2023-01-01"), pd.Timestamp("2023-01-03")],
+            ["Alice", 25, to_dt("2023-01-04"), pd.NaT],
+            ["Bob", 31, to_dt("2023-01-04"), pd.NaT],
+            ["Darlene", 40, to_dt("2023-01-04"), pd.NaT],
+            [
+                "Bob",
+                30,
+                to_dt("2023-01-02"),
+                to_dt("2023-01-04"),
+            ],
+            [
+                "Charlie",
+                35,
+                to_dt("2023-01-03"),
+                to_dt("2023-01-04"),
+            ],
+            [
+                "Alice",
+                25,
+                to_dt("2023-01-01"),
+                to_dt("2023-01-03"),
+            ],
         ],
     )
-    print(expected_results)
 
     assert_dataframes_are_equal(actual_results, expected_results)
+
+
+def test_get_data_with_default_params(sample_archive):
+    """Tests the `get_data` function with default parameters."""
+
+    actual_results = data_archive.get_data(sample_archive)
+    expected_results = pd.DataFrame(
+        columns=["name", "age"],
+        data=[
+            ["Bob", 30],
+            ["Charlie", 35],
+        ],
+    )
+    assert_dataframes_are_equal(actual_results, expected_results)
+
+
+def test_get_data_with_as_of(sample_archive):
+    """Tests the `get_data` function with the as_of parameter."""
+
+    actual_results = data_archive.get_data(sample_archive, as_of="2023-01-02")
+    expected_results = pd.DataFrame(
+        columns=["name", "age"],
+        data=[
+            ["Alice", 25],
+            ["Bob", 30],
+        ],
+    )
+    assert_dataframes_are_equal(actual_results, expected_results)
+
+
+def test_get_data_with_include_timestamps(sample_archive):
+    """Tests the `get_data` function with the include_timestamps parameter."""
+
+    actual_results = data_archive.get_data(sample_archive, include_timestamps=True)
+    expected_results = pd.DataFrame(
+        columns=["name", "age", "archive_last_updated_at", "archive_deleted_at"],
+        data=[
+            ["Bob", 30, to_dt("2023-01-02"), pd.NaT],
+            ["Charlie", 35, to_dt("2023-01-03"), pd.NaT],
+        ],
+    )
+    assert_dataframes_are_equal(actual_results, expected_results)
+
+
+def test_get_data_with_include_deleted(sample_archive):
+    """Tests the `get_data` function with the include_deleted parameter."""
+
+    actual_results = data_archive.get_data(sample_archive, include_deleted=True)
+    expected_results = pd.DataFrame(
+        columns=["name", "age"],
+        data=[
+            ["Alice", 25],
+            ["Bob", 30],
+            ["Charlie", 35],
+        ],
+    )
+    assert_dataframes_are_equal(actual_results, expected_results)
+
+
+def test_info(sample_archive):
+    """Tests the `info` function"""
+
+    actual_results = data_archive.info(sample_archive)
+    expected_results = (
+        "Archive Path: test/data_archive_unit_tests/sample_archive\n"
+        "Current Length (excluding deleted): 2\n"
+        "Total Length (including deleted): 3\n"
+        "Last Updated At: 2023-01-03 00:00:00-07:00\n"
+        "Oldest Record: 2023-01-01 00:00:00-07:00\n"
+    )
+    assert actual_results == expected_results
+
+
+def test_undo_changes(sample_archive):
+    """Tests the `undo_changes` function"""
+
+    # Undo the changes then download the archive to check it
+    with disable_run_logger():
+        data_archive.undo_changes(
+            sample_archive,
+            start_at="2023-01-03",
+            commit=True,
+        )
+        archive_bytes = object_storage.get.fn(
+            sample_archive, data_archive.archive_storage()
+        )
+    actual_results = pd.read_pickle(io.BytesIO(archive_bytes))
+
+    expected_results = pd.DataFrame(
+        columns=["name", "age", "archive_last_updated_at", "archive_deleted_at"],
+        data=[
+            ["Alice", 25, to_dt("2023-01-01"), pd.NaT],
+            ["Bob", 30, to_dt("2023-01-02"), pd.NaT],
+        ],
+    )
+
+    assert_dataframes_are_equal(actual_results, expected_results)
+
+
+def test_init_and_info(sample_archive):
+    """Tests the `init` function and then using `info` on an empty archive"""
+
+    data_archive.init(sample_archive, overwrite=True)
+    actual_results = data_archive.info(sample_archive)
+    expected_results = (
+        "Archive Path: test/data_archive_unit_tests/sample_archive\n"
+        "Current Length (excluding deleted): 0\n"
+        "Total Length (including deleted): 0\n"
+        "Last Updated At: nan\n"
+        "Oldest Record: nan\n"
+    )
+    assert actual_results == expected_results

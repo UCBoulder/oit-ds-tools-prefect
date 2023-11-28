@@ -19,7 +19,6 @@ know all the column names.
 """
 
 import io
-import datetime
 
 import pandas as pd
 from prefect import task, get_run_logger
@@ -209,13 +208,12 @@ def update_archive(
     )
     new_rows = new_rows[new_rows["_merge"] == "right_only"].drop(columns="_merge")
     new_rows["archive_last_updated_at"] = current_time
-    new_rows["archive_deleted_at"] = None
+    new_rows["archive_deleted_at"] = pd.NaT
 
     # Combine all back into a complete archive
     full_updated_archive = pd.concat(
         [new_rows, unchanged_rows, deleted_rows, history], ignore_index=True
     )
-    print(full_updated_archive)
 
     # Store the updated archive
     with disable_run_logger():
@@ -282,14 +280,14 @@ def get_data(
         archive_df = archive_df[
             (archive_df["archive_last_updated_at"] <= as_of)
             & (
-                (archive_df["archive_deleted_at"] > as_of)
+                (archive_df["archive_deleted_at"] >= as_of)
                 | (archive_df["archive_deleted_at"].isna())
             )
         ]
         return archive_df[final_columns]
 
     # Otherwise, filter out deleted rows to get the current dataset
-    return archive_df[archive_df["archive_deleted_at"].isna()][final_columns]
+    return archive_df[pd.isnull(archive_df["archive_deleted_at"])][final_columns]
 
 
 def info(archive_path: str) -> str:
@@ -314,8 +312,8 @@ def info(archive_path: str) -> str:
         f"Archive Path: {archive_path}\n"
         f"Current Length (excluding deleted): {current_length}\n"
         f"Total Length (including deleted): {total_length}\n"
-        f"Last Updated At: {last_updated}"
-        f"Oldest Record: {first_updated}"
+        f"Last Updated At: {last_updated}\n"
+        f"Oldest Record: {first_updated}\n"
     )
 
     return info_string
@@ -335,9 +333,14 @@ def undo_changes(
         print(f"No data found in archive at {archive_path}")
         return
 
+    # TODO: this is still overflowing?
     # Parse the start_at and end_at dates
-    start_at = _parse_to_denver_time(start_at, default=datetime.datetime.min)
-    end_at = _parse_to_denver_time(end_at, default=datetime.datetime.max)
+    start_at = _parse_to_denver_time(
+        start_at, default=pd.Timestamp.min.tz_localize("America/Denver")
+    )
+    end_at = _parse_to_denver_time(
+        end_at, default=pd.Timestamp.max.tz_localize("America/Denver")
+    )
 
     # Set up filter for dropping rows added during the window
     undo_adds = (archive_df["archive_last_updated_at"] >= start_at) & (
@@ -354,7 +357,7 @@ def undo_changes(
 
     if commit:
         # Remove delete timestamps from deleted rows
-        archive_df.loc[undo_deletes, "archive_deleted_at"] = None
+        archive_df.loc[undo_deletes, "archive_deleted_at"] = pd.NaT
         # Remove updated rows
         archive_df = archive_df[~undo_adds]
 
