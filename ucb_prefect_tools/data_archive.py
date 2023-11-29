@@ -333,13 +333,12 @@ def undo_changes(
         print(f"No data found in archive at {archive_path}")
         return
 
-    # TODO: this is still overflowing?
     # Parse the start_at and end_at dates
     start_at = _parse_to_denver_time(
-        start_at, default=pd.Timestamp.min.tz_localize("America/Denver")
+        start_at, default=pd.Timestamp("1900-01-01").tz_localize("America/Denver")
     )
     end_at = _parse_to_denver_time(
-        end_at, default=pd.Timestamp.max.tz_localize("America/Denver")
+        end_at, default=pd.Timestamp("2200-01-01").tz_localize("America/Denver")
     )
 
     # Set up filter for dropping rows added during the window
