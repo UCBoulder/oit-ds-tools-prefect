@@ -27,7 +27,7 @@ def sample_archive():
 
     # Current state include Bob and Charlie and Alice being deleted
     dataframe = pd.DataFrame(
-        columns=["name", "age", "archive_last_updated_at", "archive_deleted_at"],
+        columns=["name", "age", "archive_added_at", "archive_deleted_at"],
         data=[
             ["Alice", 25, to_dt("2023-01-01"), to_dt("2023-01-03")],
             ["Bob", 30, to_dt("2023-01-02"), pd.NaT],
@@ -128,7 +128,7 @@ def test_update_archive(sample_archive):
     # Expect that Alice is added back, Bob is replaced, Charlie is deleted, and Darlene is added
     # Order is new, unchanged, freshly deleted, previously deleted
     expected_results = pd.DataFrame(
-        columns=["name", "age", "archive_last_updated_at", "archive_deleted_at"],
+        columns=["name", "age", "archive_added_at", "archive_deleted_at"],
         data=[
             ["Alice", 25, to_dt("2023-01-04"), pd.NaT],
             ["Bob", 31, to_dt("2023-01-04"), pd.NaT],
@@ -190,7 +190,7 @@ def test_get_data_with_include_timestamps(sample_archive):
 
     actual_results = data_archive.get_data(sample_archive, include_timestamps=True)
     expected_results = pd.DataFrame(
-        columns=["name", "age", "archive_last_updated_at", "archive_deleted_at"],
+        columns=["name", "age", "archive_added_at", "archive_deleted_at"],
         data=[
             ["Bob", 30, to_dt("2023-01-02"), pd.NaT],
             ["Charlie", 35, to_dt("2023-01-03"), pd.NaT],
@@ -244,7 +244,7 @@ def test_undo_changes(sample_archive):
     actual_results = pd.read_pickle(io.BytesIO(archive_bytes))
 
     expected_results = pd.DataFrame(
-        columns=["name", "age", "archive_last_updated_at", "archive_deleted_at"],
+        columns=["name", "age", "archive_added_at", "archive_deleted_at"],
         data=[
             ["Alice", 25, to_dt("2023-01-01"), pd.NaT],
             ["Bob", 30, to_dt("2023-01-02"), pd.NaT],

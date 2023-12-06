@@ -6,7 +6,7 @@ Dataset archives are kept in the object_storage system described by the Prefect 
 identified by ARCHIVE_STORAGE_BLOCK. Keep in mind you should vary `archive_path` by environment
 to keep test and prod archives distinct.
 
-Dataset archives always contain an additional archive_last_updated_at column which identifies the
+Dataset archives always contain an additional archive_added_at column which identifies the
 America/Denver datetime when that row was added to the dataset. They also contain an
 archive_deleted_at column which indicates when a row was dropped from the dataset (otherwise is
 None). These two columns are not included in the get_*_rows return values, and the get_*_rows tasks
@@ -163,7 +163,7 @@ def update_archive(
     dataframe: pd.DataFrame, archive_path: str, dt_override=None
 ) -> None:
     """Adds any new rows from `dataframe` which do not completely match existing rows in the
-    identified archived dataset with an archive_last_updated_at value of now. For rows in the
+    identified archived dataset with an archive_added_at value of now. For rows in the
     archive which do not completely match any rows in `dataframe`, sets their
     archive_deleted_at value to now. In other words, the "current state" of the archive is
     modified to match `dataframe`. `dt_override` is just used for unit testing."""
@@ -174,13 +174,13 @@ def update_archive(
         # Initialize empty archive with same columns as dataframe plus archive-specific columns
         archive_df = pd.DataFrame(
             columns=list(dataframe.columns)
-            + ["archive_last_updated_at", "archive_deleted_at"]
+            + ["archive_added_at", "archive_deleted_at"]
         )
     # Prep data
     current_archive = archive_df[pd.isnull(archive_df["archive_deleted_at"])]
     columns = _match_columns(
         dataframe,
-        current_archive.drop(columns=["archive_last_updated_at", "archive_deleted_at"]),
+        current_archive.drop(columns=["archive_added_at", "archive_deleted_at"]),
     )
     history = archive_df[~archive_df["archive_deleted_at"].isna()]
     # Remove microseconds to help with readability
@@ -208,7 +208,7 @@ def update_archive(
         current_archive, dataframe, how="right", on=columns, indicator=True
     )
     new_rows = new_rows[new_rows["_merge"] == "right_only"].drop(columns="_merge")
-    new_rows["archive_last_updated_at"] = current_time
+    new_rows["archive_added_at"] = current_time
     new_rows["archive_deleted_at"] = pd.NaT
 
     # Combine all back into a complete archive
@@ -243,9 +243,9 @@ def get_data(
     include_deleted: bool = False,
 ) -> pd.DataFrame:
     """Returns a snapshot of the archive dataset based on a date or datetime given by `as_of`,
-    which should parse to a date/datetime. Then this returns all rows with archive_last_updated_at
+    which should parse to a date/datetime. Then this returns all rows with archive_added_at
     less than as_of and archive_deleted_at greater than as_of or null. If `as_of` is None (default),
-    returns the current dataset. If `include_timestamps` is True, the archive_last_updated_at and
+    returns the current dataset. If `include_timestamps` is True, the archive_added_at and
     archive_deleted_at columns are included. If `include_deleted` is True, returns all rows of the
     archive, including deleted (`as_of` is ignored in this case)."""
 
@@ -257,7 +257,7 @@ def get_data(
     if not archive_bytes:
         if include_timestamps:
             return pd.DataFrame(
-                data=[], columns=["archive_last_updated_at", "archive_deleted_at"]
+                data=[], columns=["archive_added_at", "archive_deleted_at"]
             )
         return pd.DataFrame()
 
@@ -269,7 +269,7 @@ def get_data(
         final_columns = [
             i
             for i in archive_df.columns
-            if i not in ["archive_last_updated_at", "archive_deleted_at"]
+            if i not in ["archive_added_at", "archive_deleted_at"]
         ]
 
     if include_deleted:
@@ -279,7 +279,7 @@ def get_data(
         as_of = _parse_to_denver_time(as_of)
         # Filter for rows valid as of the specified date
         archive_df = archive_df[
-            (archive_df["archive_last_updated_at"] <= as_of)
+            (archive_df["archive_added_at"] <= as_of)
             & (
                 (archive_df["archive_deleted_at"] >= as_of)
                 | (archive_df["archive_deleted_at"].isna())
@@ -304,13 +304,13 @@ def info(archive_path: str) -> str:
         last_updated = "Never"
         first_updated = "Never"
     else:
-        last_added = archive_df["archive_last_updated_at"].dropna().max()
+        last_added = archive_df["archive_added_at"].dropna().max()
         last_deleted = archive_df["archive_deleted_at"].dropna().max()
         try:
             last_updated = max(last_added, last_deleted)
         except TypeError:
             last_updated = last_added
-        first_updated = archive_df["archive_last_updated_at"].dropna().min()
+        first_updated = archive_df["archive_added_at"].dropna().min()
         last_updated = last_updated.strftime("%Y-%m-%d %H:%M:%S")
         first_updated = first_updated.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -348,8 +348,8 @@ def undo_changes(
     )
 
     # Set up filter for dropping rows added during the window
-    undo_adds = (archive_df["archive_last_updated_at"] >= start_at) & (
-        archive_df["archive_last_updated_at"] <= end_at
+    undo_adds = (archive_df["archive_added_at"] >= start_at) & (
+        archive_df["archive_added_at"] <= end_at
     )
     # Set up filter for removing delete timestamps during the window
     undo_deletes = (
