@@ -183,7 +183,8 @@ def update_archive(
         current_archive.drop(columns=["archive_last_updated_at", "archive_deleted_at"]),
     )
     history = archive_df[~archive_df["archive_deleted_at"].isna()]
-    current_time = util.now() if not dt_override else dt_override
+    # Remove microseconds to help with readability
+    current_time = util.now().replace(microsecond=0) if not dt_override else dt_override
 
     # Get rows from the current archive and mark them deleted if they aren't in the new dataframe
     deleted_or_unchanged = pd.merge(
@@ -299,21 +300,20 @@ def info(archive_path: str) -> str:
     # Calculate various statistics for the archive
     current_length = len(archive_df[archive_df["archive_deleted_at"].isna()])
     total_length = len(archive_df)
-    last_updated = max(
-        archive_df["archive_last_updated_at"].max(),
-        archive_df["archive_deleted_at"].max(),
-    )
-    first_updated = min(
-        archive_df["archive_last_updated_at"].min(),
-        archive_df["archive_deleted_at"].min(),
-    )
+    last_added = archive_df["archive_last_updated_at"].dropna().max()
+    last_deleted = archive_df["archive_deleted_at"].dropna().max()
+    try:
+        last_updated = max(last_added, last_deleted)
+    except TypeError:
+        last_updated = last_added if last_added else last_deleted
+    first_updated = archive_df["archive_last_updated_at"].dropna().min()
 
     info_string = (
         f"Archive Path: {archive_path}\n"
         f"Current Length (excluding deleted): {current_length}\n"
         f"Total Length (including deleted): {total_length}\n"
-        f"Last Updated At: {last_updated}\n"
-        f"Oldest Record: {first_updated}\n"
+        f"Last Updated At: {last_updated:%Y-%m-%d %H:%M:%S}\n"
+        f"Oldest Record: {first_updated:%Y-%m-%d %H:%M:%S}"
     )
 
     return info_string
