@@ -161,8 +161,11 @@ def run_flow_command_line_interface(flow_filename, flow_function_name, args=None
             parsed_args.label,
         )
     if parsed_args.command == "run":
-        if git.Repo().active_branch.name == "main":
-            raise RuntimeError('Command "run" not allowed from main branch')
+        if git.Repo().active_branch.name == "main" and parsed_args.label == "infer":
+            raise RuntimeError(
+                "Command `run` not allowed from main branch unless you specify an alternate "
+                "`--label`"
+            )
         deployment_id = _deploy(
             flow_filename,
             flow_function_name,
@@ -197,7 +200,7 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch, label="
             f"File {flow_filename} not found in the {LOCAL_FLOW_FOLDER} folder"
         )
 
-    # Get repo info then temporarily switch into flows folder to make importing easier
+    # Get repo info and identify what label we're working with
     if label == "main":
         raise ValueError(
             'Cannot use value "main" with `label` option. To deploy a main flow, run the deploy '
@@ -206,8 +209,9 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch, label="
     inferred_label, repo_name, branch_name = _get_repo_info()
     if label == "infer":
         label = inferred_label
-    with _ChangeDir(LOCAL_FLOW_FOLDER):
 
+    # Temporarily change into the flows folder
+    with _ChangeDir(LOCAL_FLOW_FOLDER):
         # Import the module and flow
         module_name = os.path.splitext(flow_filename)[0]
         try:
