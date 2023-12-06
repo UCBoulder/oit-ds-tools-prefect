@@ -300,20 +300,26 @@ def info(archive_path: str) -> str:
     # Calculate various statistics for the archive
     current_length = len(archive_df[archive_df["archive_deleted_at"].isna()])
     total_length = len(archive_df)
-    last_added = archive_df["archive_last_updated_at"].dropna().max()
-    last_deleted = archive_df["archive_deleted_at"].dropna().max()
-    try:
-        last_updated = max(last_added, last_deleted)
-    except TypeError:
-        last_updated = last_added if last_added else last_deleted
-    first_updated = archive_df["archive_last_updated_at"].dropna().min()
+    if not total_length:
+        last_updated = "Never"
+        first_updated = "Never"
+    else:
+        last_added = archive_df["archive_last_updated_at"].dropna().max()
+        last_deleted = archive_df["archive_deleted_at"].dropna().max()
+        try:
+            last_updated = max(last_added, last_deleted)
+        except TypeError:
+            last_updated = last_added
+        first_updated = archive_df["archive_last_updated_at"].dropna().min()
+        last_updated = last_updated.strftime("%Y-%m-%d %H:%M:%S")
+        first_updated = first_updated.strftime("%Y-%m-%d %H:%M:%S")
 
     info_string = (
         f"Archive Path: {archive_path}\n"
         f"Current Length (excluding deleted): {current_length}\n"
         f"Total Length (including deleted): {total_length}\n"
-        f"Last Updated At: {last_updated:%Y-%m-%d %H:%M:%S}\n"
-        f"Oldest Record: {first_updated:%Y-%m-%d %H:%M:%S}"
+        f"Last Updated At: {last_updated}\n"
+        f"Oldest Record: {first_updated}"
     )
 
     return info_string

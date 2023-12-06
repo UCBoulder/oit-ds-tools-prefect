@@ -222,8 +222,8 @@ def test_info(sample_archive):
         "Archive Path: test/data_archive_unit_tests/sample_archive\n"
         "Current Length (excluding deleted): 2\n"
         "Total Length (including deleted): 3\n"
-        "Last Updated At: 2023-01-03 00:00:00-07:00\n"
-        "Oldest Record: 2023-01-01 00:00:00-07:00\n"
+        "Last Updated At: 2023-01-03 00:00:00\n"
+        "Oldest Record: 2023-01-01 00:00:00"
     )
     assert actual_results == expected_results
 
@@ -263,7 +263,7 @@ def test_init_and_info(sample_archive):
         "Archive Path: test/data_archive_unit_tests/sample_archive\n"
         "Current Length (excluding deleted): 0\n"
         "Total Length (including deleted): 0\n"
-        "Last Updated At: nan\n"
-        "Oldest Record: nan\n"
+        "Last Updated At: Never\n"
+        "Oldest Record: Never"
     )
     assert actual_results == expected_results
