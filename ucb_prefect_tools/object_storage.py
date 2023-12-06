@@ -369,7 +369,7 @@ def sftp_list(connection_info: dict, file_prefix: str = "./", attributes: list[s
             out = [
                 {
                     attr: getattr(i, attr) for attr in attributes
-                }
+                }.update({'name': i.filename})
                 for i in sftp.listdir_attr(directory)
                 if stat.S_ISREG(i.st_mode) and i.filename.startswith(prefix)
             ]
@@ -478,7 +478,7 @@ def minio_list(connection_info: dict, prefix: str = "", attributes: list[str] = 
         out = [
             {
                 attr: getattr(i, attr) for attr in attributes
-            }
+            }.update({'name': os.path.basename(i.object_name)})
             for i in minio.list_objects(bucket, prefix=prefix)
         ]
     else:
@@ -585,7 +585,7 @@ def s3_list(connection_info: dict, Prefix: str = "", attributes: list[str] = Non
         out = [
             {
                 attr: getattr(i, attr) for attr in attributes
-            }
+            }.update({'name': os.path.basename(i.key)})
             for i in bucket.objects.filter(Prefix=Prefix)]
     else:
         out = [os.path.basename(i.key) for i in bucket.objects.filter(Prefix=Prefix)]
@@ -741,7 +741,7 @@ def smb_list(connection_info: dict, prefix: str = "./", attributes: list[str] = 
             out = [
                 {
                     attr: getattr(i, attr) for attr in attributes
-                }
+                }.update({'name': i.filename})
                 for i in conn.listPath(
                     service_name,
                     path=os.path.dirname(prefix),
@@ -915,7 +915,7 @@ def onedrive_list(connection_info: dict, prefix: str = "", attributes: list[str]
             filenames += [
                 {
                     attr: item[attr] for attr in attributes
-                }
+                }.update({'name': item["name"]})
                 for item in response.json().get("value", [])
                 if not item.get("folder")
             ]
