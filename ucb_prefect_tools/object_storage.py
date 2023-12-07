@@ -367,9 +367,9 @@ def sftp_list(connection_info: dict, file_prefix: str = "./", attributes: list[s
     with _sftp_connection(ssh, connection_info) as sftp:
         if attributes:
             out = [
-                {
+                dict(name=i.filename, **{
                     attr: getattr(i, attr) for attr in attributes
-                }.update({'name': i.filename})
+                })
                 for i in sftp.listdir_attr(directory)
                 if stat.S_ISREG(i.st_mode) and i.filename.startswith(prefix)
             ]
@@ -476,9 +476,9 @@ def minio_list(connection_info: dict, prefix: str = "", attributes: list[str] = 
     minio = Minio(**connection_info)
     if attributes:
         out = [
-            {
+            dict(name=os.path.basename(i.object_name), **{
                 attr: getattr(i, attr) for attr in attributes
-            }.update({'name': os.path.basename(i.object_name)})
+            })
             for i in minio.list_objects(bucket, prefix=prefix)
         ]
     else:
@@ -583,9 +583,9 @@ def s3_list(connection_info: dict, Prefix: str = "", attributes: list[str] = Non
     bucket = s3res.Bucket(bucket)
     if attributes:
         out = [
-            {
+            dict(name=os.path.basename(i.key), **{
                 attr: getattr(i, attr) for attr in attributes
-            }.update({'name': os.path.basename(i.key)})
+            })
             for i in bucket.objects.filter(Prefix=Prefix)]
     else:
         out = [os.path.basename(i.key) for i in bucket.objects.filter(Prefix=Prefix)]
@@ -739,9 +739,9 @@ def smb_list(connection_info: dict, prefix: str = "./", attributes: list[str] = 
             )
         if attributes:
             out = [
-                {
+                dict(name=i.filename, **{
                     attr: getattr(i, attr) for attr in attributes
-                }.update({'name': i.filename})
+                })
                 for i in conn.listPath(
                     service_name,
                     path=os.path.dirname(prefix),
@@ -913,9 +913,9 @@ def onedrive_list(connection_info: dict, prefix: str = "", attributes: list[str]
         # Extract filenames from the response
         if attributes:
             filenames += [
-                {
+                dict(name=item["name"], **{
                     attr: item[attr] for attr in attributes
-                }.update({'name': item["name"]})
+                })
                 for item in response.json().get("value", [])
                 if not item.get("folder")
             ]
