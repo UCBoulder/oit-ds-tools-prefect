@@ -200,15 +200,8 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch, label="
             f"File {flow_filename} not found in the {LOCAL_FLOW_FOLDER} folder"
         )
 
-    # Get repo info and identify what label we're working with
-    if label == "main":
-        raise ValueError(
-            'Cannot use value "main" with `label` option. To deploy a main flow, run the deploy '
-            "command from the main Git branch without specifying `label`."
-        )
+    # Get repo info
     inferred_label, repo_name, branch_name = _get_repo_info()
-    if label == "infer":
-        label = inferred_label
 
     # Temporarily change into the flows folder
     with _ChangeDir(LOCAL_FLOW_FOLDER):
@@ -219,6 +212,15 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch, label="
         except KeyError:
             module = importlib.import_module(module_name)
             flow_function = getattr(module, flow_function_name)
+
+        # Set label and deployment name based on label parameter
+        if label == "infer":
+            label = inferred_label
+            deployment_name = f"{repo_name} | {branch_name} | {module_name}"
+        else:
+            deployment_name = (
+                f"{repo_name} | {branch_name} (as {label}) | {module_name}"
+            )
 
         # Parse docstring fields and action on them as appropriate
         docstring_fields = parse_docstring_fields(
@@ -240,7 +242,7 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch, label="
         flow_function.name = f"{repo_name} | {module_name}"
         deployment = deployments.Deployment.build_from_flow(
             flow=flow_function,
-            name=f"{repo_name} | {branch_name} | {module_name}",
+            name=deployment_name,
             tags=flow_tags,
             work_pool_name=f"{label}-agent",
             work_queue_name=None,
