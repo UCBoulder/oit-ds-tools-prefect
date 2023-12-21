@@ -120,7 +120,9 @@ def remove(object_name: str, connection_info: dict) -> None:
 
 
 @task(name="object_storage.list_names")
-def list_names(connection_info: dict, prefix: str = None, attributes: bool = False) -> list[str | dict]:
+def list_names(
+    connection_info: dict, prefix: str = None, attributes: bool = False
+) -> list[str | dict]:
     """Returns a list of object or file names in the given folder. Filters by object name prefix,
     which includes directory path for file systems. Folders are not included; non-recursive.
 
@@ -349,7 +351,9 @@ def sftp_remove(file_path: str, connection_info: dict) -> None:
         sftp.remove(file_path)
 
 
-def sftp_list(connection_info: dict, file_prefix: str = "./", attributes: bool = False) -> list[str | dict]:
+def sftp_list(
+    connection_info: dict, file_prefix: str = "./", attributes: bool = False
+) -> list[str | dict]:
     """Returns a list of filenames for files with the given path prefix. Only the filenames are
     returned, without folder paths."""
 
@@ -367,17 +371,18 @@ def sftp_list(connection_info: dict, file_prefix: str = "./", attributes: bool =
     with _sftp_connection(ssh, connection_info) as sftp:
         if attributes:
             sftp_attributes = [
-                'st_size',
-                'st_uid',
-                'st_gid',
-                'st_mode',
-                'st_atime',
-                'st_mtime',
+                "st_size",
+                "st_uid",
+                "st_gid",
+                "st_mode",
+                "st_atime",
+                "st_mtime",
             ]
             out = [
-                dict(name=i.filename, **{
-                    attr: getattr(i, attr) for attr in sftp_attributes
-                })
+                dict(
+                    name=i.filename,
+                    **{attr: getattr(i, attr) for attr in sftp_attributes},
+                )
                 for i in sftp.listdir_attr(directory)
                 if stat.S_ISREG(i.st_mode) and i.filename.startswith(prefix)
             ]
@@ -468,7 +473,9 @@ def minio_remove(object_name: str, connection_info: dict) -> None:
     minio.remove_object(bucket, object_name)
 
 
-def minio_list(connection_info: dict, prefix: str = "", attributes: bool = False) -> list[str | dict]:
+def minio_list(
+    connection_info: dict, prefix: str = "", attributes: bool = False
+) -> list[str | dict]:
     """Returns a list of object names with the given prefix in a Minio bucket; non-recursive."""
 
     if "secure" not in connection_info:
@@ -574,7 +581,9 @@ def s3_remove(object_key: str, connection_info: dict, VersionId: str = None) -> 
     obj.delete(VersionId=VersionId)
 
 
-def s3_list(connection_info: dict, Prefix: str = "", attributes: bool = False) -> list[str | dict]:
+def s3_list(
+    connection_info: dict, Prefix: str = "", attributes: bool = False
+) -> list[str | dict]:
     """Returns a list of object names with the given prefix in an Amazon S3 bucket;
     non-recursive."""
 
@@ -590,7 +599,8 @@ def s3_list(connection_info: dict, Prefix: str = "", attributes: bool = False) -
     if attributes:
         out = [
             dict(name=os.path.basename(i.key), **dict(i))
-            for i in bucket.objects.filter(Prefix=Prefix)]
+            for i in bucket.objects.filter(Prefix=Prefix)
+        ]
     else:
         out = [os.path.basename(i.key) for i in bucket.objects.filter(Prefix=Prefix)]
     get_run_logger().info("Amazon S3: Found %s files", len(out))
@@ -714,7 +724,9 @@ def smb_remove(file_path: str, connection_info: dict) -> None:
         conn.deleteFiles(service_name, file_path)
 
 
-def smb_list(connection_info: dict, prefix: str = "./", attributes: bool = False) -> list[str | dict]:
+def smb_list(
+    connection_info: dict, prefix: str = "./", attributes: bool = False
+) -> list[str | dict]:
     """Returns a list of filenames for files with the given path prefix. Only the filenames are
     returned, without folder paths."""
 
@@ -743,21 +755,22 @@ def smb_list(connection_info: dict, prefix: str = "./", attributes: bool = False
             )
         if attributes:
             smb_attributes = [
-                'create_time',
-                'last_access_time',
-                'last_write_time',
-                'last_attr_change_time',
-                'file_size',
-                'alloc_size',
-                'file_attributes',
-                'short_name',
-                'filename',
-                'file_id'
+                "create_time",
+                "last_access_time",
+                "last_write_time",
+                "last_attr_change_time",
+                "file_size",
+                "alloc_size",
+                "file_attributes",
+                "short_name",
+                "filename",
+                "file_id",
             ]
             out = [
-                dict(name=i.filename, **{
-                    attr: getattr(i, attr) for attr in smb_attributes
-                })
+                dict(
+                    name=i.filename,
+                    **{attr: getattr(i, attr) for attr in smb_attributes},
+                )
                 for i in conn.listPath(
                     service_name,
                     path=os.path.dirname(prefix),
@@ -901,7 +914,9 @@ def onedrive_remove(file_path: str, connection_info: dict) -> None:
     response.raise_for_status()
 
 
-def onedrive_list(connection_info: dict, prefix: str = "", attributes: bool = False) -> list[str | dict]:
+def onedrive_list(
+    connection_info: dict, prefix: str = "", attributes: bool = False
+) -> list[str | dict]:
     """Returns a list of filenames for files with the given path prefix.
     Only the filenames are returned, without folder paths."""
 
@@ -929,7 +944,8 @@ def onedrive_list(connection_info: dict, prefix: str = "", attributes: bool = Fa
         # Extract filenames from the response
         if attributes:
             filenames += [
-                item for item in response.json().get("value", [])
+                item
+                for item in response.json().get("value", [])
                 if not item.get("folder")
             ]
         else:
