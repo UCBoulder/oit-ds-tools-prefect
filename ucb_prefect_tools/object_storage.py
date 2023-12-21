@@ -367,11 +367,16 @@ def sftp_list(connection_info: dict, file_prefix: str = "./", attributes: bool =
     with _sftp_connection(ssh, connection_info) as sftp:
         if attributes:
             sftp_attributes = [
-
+                'st_size',
+                'st_uid',
+                'st_gid',
+                'st_mode',
+                'st_atime',
+                'st_mtime',
             ]
             out = [
                 dict(name=i.filename, **{
-                    attr: getattr(i, attr) for attr in i.attr
+                    attr: getattr(i, attr) for attr in sftp_attributes
                 })
                 for i in sftp.listdir_attr(directory)
                 if stat.S_ISREG(i.st_mode) and i.filename.startswith(prefix)
