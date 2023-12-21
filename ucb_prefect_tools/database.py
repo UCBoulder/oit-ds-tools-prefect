@@ -22,6 +22,7 @@ import psycopg2
 import pyodbc
 from mysql import connector as mysql_connector
 from prefect import task, get_run_logger
+from snowflake-connector-python import snowflake.connector as snowflake_connector
 import pandas as pd
 
 from . import util
@@ -63,6 +64,7 @@ def sql_extract(
         postgre=get_sql_extract("Postgre", psycopg2.connect),
         odbc=get_sql_extract("ODBC", odbc_connect),
         mysql=get_sql_extract("MySQL", mysql_connector.connect),
+        snowflake=
     )
     dataframe = function(
         sql_query, info, query_params, lob_columns, chunks_prefix, chunksize
@@ -101,6 +103,7 @@ def insert(
         postgre=get_insert("Postgre", psycopg2.connect),
         odbc=get_insert("ODBC", odbc_connect),
         mysql=get_insert("MySQL", mysql_connector.connect),
+        snowflake=get_insert("Snowflake", snowflake_connector.connect),
     )
     return function(
         dataframe,
