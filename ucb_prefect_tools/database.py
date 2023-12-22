@@ -64,7 +64,7 @@ def sql_extract(
         postgre=get_sql_extract("Postgre", psycopg2.connect),
         odbc=get_sql_extract("ODBC", odbc_connect),
         mysql=get_sql_extract("MySQL", mysql_connector.connect),
-        snowflake=
+        snowflake=get_sql_extract("Snowflake", snowflake_connector)
     )
     dataframe = function(
         sql_query, info, query_params, lob_columns, chunks_prefix, chunksize
