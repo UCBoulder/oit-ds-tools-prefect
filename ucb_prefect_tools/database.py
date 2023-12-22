@@ -22,7 +22,7 @@ import psycopg2
 import pyodbc
 from mysql import connector as mysql_connector
 from prefect import task, get_run_logger
-from snowflake-connector-python import snowflake.connector as snowflake_connector
+import snowflake.connector as snowflake_connector
 import pandas as pd
 
 from . import util
