@@ -171,7 +171,8 @@ def execute_sql(sql_statement: str, connection_info: dict, query_params=None):
         oracle=oracle_execute_sql,
         postgre=get_execute_sql("Postgre", psycopg2.connect),
         odbc=get_execute_sql("ODBC", odbc_connect),
-        mysql=get_execute_sql("MySQL", mysql_connector.connect),
+        mysql=get_execute_sql("MySQL", mysql_connector.connect)
+        snowflake=get_execute_sql("Snowflake", snowflake_connector.connect)
     )
     return function(sql_statement, info, query_params)
 
