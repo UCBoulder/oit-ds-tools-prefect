@@ -229,15 +229,15 @@ def _oracle_host(dsn_string):
 
 
 def _oracle_cast(value):
+    # Convert Na-like objects to None
+    if pd.isnull(value):
+        return None
+
     # Convert date-like objects to strings in the Oracle format
     if isinstance(value, (datetime.datetime, pd.Timestamp)):
         return value.strftime("%Y-%m-%d %H:%M:%S")
     if isinstance(value, datetime.date):
         return value.strftime("%Y-%m-%d 00:00:00")
-
-    # Convert Na-like objects to None
-    if pd.isnull(value):
-        return None
 
     # Return everything else as a string
     return str(value)
@@ -362,6 +362,10 @@ def oracle_insert(
             get_run_logger().info(
                 "Oracle: Inserting into %s on %s", table_identifier, host
             )
+            # Set ISO date format for insertion
+            cursor.execute(
+                "ALTER SESSION SET NLS_DATE_FORMAT = 'YYYY-MM-DD HH24:MI:SS'"
+            )
             # Insert records in batches
             for start in range(0, len(records), batch_size):
                 to_insert = records[start : start + batch_size]
@@ -450,6 +454,10 @@ def oracle_update(
         try:
             get_run_logger().info(
                 "Oracle: Updating data in %s on %s", table_identifier, host
+            )
+            # Set ISO date format for insertion
+            cursor.execute(
+                "ALTER SESSION SET NLS_DATE_FORMAT = 'YYYY-MM-DD HH24:MI:SS'"
             )
             # Update records in batches
             for start in range(0, len(records), batch_size):
