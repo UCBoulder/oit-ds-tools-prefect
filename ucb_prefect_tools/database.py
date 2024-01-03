@@ -362,9 +362,12 @@ def oracle_insert(
             get_run_logger().info(
                 "Oracle: Inserting into %s on %s", table_identifier, host
             )
-            # Set ISO date format for insertion
+            # Set ISO date/timestamp format for insertion
             cursor.execute(
-                "ALTER SESSION SET NLS_DATE_FORMAT = 'YYYY-MM-DD HH24:MI:SS'"
+                """BEGIN
+    EXECUTE IMMEDIATE 'ALTER SESSION SET NLS_DATE_FORMAT = ''YYYY-MM-DD HH24:MI:SS''';
+    EXECUTE IMMEDIATE 'ALTER SESSION SET NLS_TIMESTAMP_FORMAT = ''YYYY-MM-DD HH24:MI:SS''';
+END;"""
             )
             # Insert records in batches
             for start in range(0, len(records), batch_size):
@@ -455,9 +458,12 @@ def oracle_update(
             get_run_logger().info(
                 "Oracle: Updating data in %s on %s", table_identifier, host
             )
-            # Set ISO date format for insertion
+            # Set ISO date/timestamp format for insertion
             cursor.execute(
-                "ALTER SESSION SET NLS_DATE_FORMAT = 'YYYY-MM-DD HH24:MI:SS'"
+                """BEGIN
+    EXECUTE IMMEDIATE 'ALTER SESSION SET NLS_DATE_FORMAT = ''YYYY-MM-DD HH24:MI:SS''';
+    EXECUTE IMMEDIATE 'ALTER SESSION SET NLS_TIMESTAMP_FORMAT = ''YYYY-MM-DD HH24:MI:SS''';
+END;"""
             )
             # Update records in batches
             for start in range(0, len(records), batch_size):
