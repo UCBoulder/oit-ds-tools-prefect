@@ -17,6 +17,8 @@ the constructor indicated in the list above, with some exceptions:
 
 # pylint:disable=broad-except
 
+import datetime
+
 import oracledb
 import psycopg2
 import pyodbc
@@ -226,6 +228,21 @@ def _oracle_host(dsn_string):
         return dsn_string.split("/")[0].split(":")[0].strip()
 
 
+def _oracle_cast(value):
+    # Convert Na-like objects to None
+    if pd.isnull(value):
+        return None
+
+    # Convert date-like objects to strings in the Oracle format
+    if isinstance(value, (datetime.datetime, pd.Timestamp)):
+        return value.strftime("%Y-%m-%d %H:%M:%S")
+    if isinstance(value, datetime.date):
+        return value.strftime("%Y-%m-%d 00:00:00")
+
+    # Return everything else as a string
+    return str(value)
+
+
 def oracle_sql_extract(
     sql_query: str,
     connection_info: dict,
@@ -327,10 +344,10 @@ def oracle_insert(
     if pre_insert_statements is None:
         pre_insert_statements = []
 
-    # Replace NA values with None and turn to list of dicts
+    # Turn into a list of dicts
+    # At the same time, convert all datatypes to strings to avoid weird Oracle type issues
     records = [
-        {k: None if pd.isnull(v) else v for k, v in i.items()}
-        for i in dataframe.to_dict("records")
+        {k: _oracle_cast(v) for k, v in i.items()} for i in dataframe.to_dict("records")
     ]
 
     with oracledb.connect(**connection_info) as conn:
@@ -344,6 +361,13 @@ def oracle_insert(
         try:
             get_run_logger().info(
                 "Oracle: Inserting into %s on %s", table_identifier, host
+            )
+            # Set ISO date/timestamp format for insertion
+            cursor.execute(
+                """BEGIN
+    EXECUTE IMMEDIATE 'ALTER SESSION SET NLS_DATE_FORMAT = ''YYYY-MM-DD HH24:MI:SS''';
+    EXECUTE IMMEDIATE 'ALTER SESSION SET NLS_TIMESTAMP_FORMAT = ''YYYY-MM-DD HH24:MI:SS''';
+END;"""
             )
             # Insert records in batches
             for start in range(0, len(records), batch_size):
@@ -416,10 +440,10 @@ def oracle_update(
     if pre_update_statements is None:
         pre_update_statements = []
 
-    # Replace NA values with None and turn to list of dicts
+    # Turn into a list of dicts
+    # At the same time, convert all datatypes to strings to avoid weird Oracle type issues
     records = [
-        {k: None if pd.isnull(v) else v for k, v in i.items()}
-        for i in dataframe.to_dict("records")
+        {k: _oracle_cast(v) for k, v in i.items()} for i in dataframe.to_dict("records")
     ]
 
     with oracledb.connect(**connection_info) as conn:
@@ -433,6 +457,13 @@ def oracle_update(
         try:
             get_run_logger().info(
                 "Oracle: Updating data in %s on %s", table_identifier, host
+            )
+            # Set ISO date/timestamp format for insertion
+            cursor.execute(
+                """BEGIN
+    EXECUTE IMMEDIATE 'ALTER SESSION SET NLS_DATE_FORMAT = ''YYYY-MM-DD HH24:MI:SS''';
+    EXECUTE IMMEDIATE 'ALTER SESSION SET NLS_TIMESTAMP_FORMAT = ''YYYY-MM-DD HH24:MI:SS''';
+END;"""
             )
             # Update records in batches
             for start in range(0, len(records), batch_size):
