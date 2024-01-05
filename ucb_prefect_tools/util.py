@@ -150,6 +150,7 @@ def run_flow_command_line_interface(flow_filename, flow_function_name, args=None
     parser.add_argument("command", choices=["deploy", "run"])
     parser.add_argument("--image-name", type=str, default="oit-ds-prefect-default")
     parser.add_argument("--image-branch", type=str, default="main")
+    parser.add_argument("--label", type=str, default="infer")
     parsed_args = parser.parse_args(args)
     if parsed_args.command == "deploy":
         _deploy(
@@ -157,15 +158,20 @@ def run_flow_command_line_interface(flow_filename, flow_function_name, args=None
             flow_function_name,
             parsed_args.image_name,
             parsed_args.image_branch,
+            parsed_args.label,
         )
     if parsed_args.command == "run":
-        if git.Repo().active_branch.name == "main":
-            raise RuntimeError('Command "run" not allowed from main branch')
+        if git.Repo().active_branch.name == "main" and parsed_args.label == "infer":
+            raise RuntimeError(
+                "Command `run` not allowed from main branch unless you specify an alternate "
+                "`--label`"
+            )
         deployment_id = _deploy(
             flow_filename,
             flow_function_name,
             parsed_args.image_name,
             parsed_args.image_branch,
+            parsed_args.label,
         )
         print("Running deployment...")
         flow_run = deployments.run_deployment(deployment_id)
@@ -182,7 +188,7 @@ async def _delete_deployment(deployment_id):
         await client.delete_deployment(deployment_id)
 
 
-def _deploy(flow_filename, flow_function_name, image_name, image_branch):
+def _deploy(flow_filename, flow_function_name, image_name, image_branch, label="infer"):
     # pylint: disable=too-many-locals
 
     # Check file locations
@@ -194,10 +200,11 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch):
             f"File {flow_filename} not found in the {LOCAL_FLOW_FOLDER} folder"
         )
 
-    # Get repo info then temporarily switch into flows folder to make importing easier
-    label, repo_name, branch_name = _get_repo_info()
-    with _ChangeDir(LOCAL_FLOW_FOLDER):
+    # Get repo info
+    inferred_label, repo_name, branch_name = _get_repo_info()
 
+    # Temporarily change into the flows folder
+    with _ChangeDir(LOCAL_FLOW_FOLDER):
         # Import the module and flow
         module_name = os.path.splitext(flow_filename)[0]
         try:
@@ -205,6 +212,15 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch):
         except KeyError:
             module = importlib.import_module(module_name)
             flow_function = getattr(module, flow_function_name)
+
+        # Set label and deployment name based on label parameter
+        if label == "infer":
+            label = inferred_label
+            deployment_name = f"{repo_name} | {branch_name} | {module_name}"
+        else:
+            deployment_name = (
+                f"{repo_name} | {branch_name} (as {label}) | {module_name}"
+            )
 
         # Parse docstring fields and action on them as appropriate
         docstring_fields = parse_docstring_fields(
@@ -226,7 +242,7 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch):
         flow_function.name = f"{repo_name} | {module_name}"
         deployment = deployments.Deployment.build_from_flow(
             flow=flow_function,
-            name=f"{repo_name} | {branch_name} | {module_name}",
+            name=deployment_name,
             tags=flow_tags,
             work_pool_name=f"{label}-agent",
             work_queue_name=None,
