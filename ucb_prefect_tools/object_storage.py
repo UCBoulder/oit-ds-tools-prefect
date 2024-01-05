@@ -126,8 +126,8 @@ def list_names(
     """Returns a list of object or file names in the given folder. Filters by object name prefix,
     which includes directory path for file systems. Folders are not included; non-recursive.
 
-    attributes: list[str] - if given, will instead return a list of dictionaries containing the
-    requested attributes for each file found.
+    attributes: bool - if given, will instead return a list of dictionaries containing the
+    attributes for each file found.
     """
 
     info = connection_info.copy()
