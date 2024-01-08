@@ -18,6 +18,8 @@ the constructor indicated in the list above, with some exceptions:
 # pylint:disable=broad-except
 
 import datetime
+import io
+import re
 
 import oracledb
 import psycopg2
@@ -25,6 +27,7 @@ import pyodbc
 from mysql import connector as mysql_connector
 from prefect import task, get_run_logger
 import pandas as pd
+import snowflake
 
 from . import util
 
@@ -65,6 +68,7 @@ def sql_extract(
         postgre=get_sql_extract("Postgre", psycopg2.connect),
         odbc=get_sql_extract("ODBC", odbc_connect),
         mysql=get_sql_extract("MySQL", mysql_connector.connect),
+        snowflake=get_sql_extract("Snowflake", snowflake.connector.connect),
     )
     dataframe = function(
         sql_query, info, query_params, lob_columns, chunks_prefix, chunksize
@@ -103,6 +107,7 @@ def insert(
         postgre=get_insert("Postgre", psycopg2.connect),
         odbc=get_insert("ODBC", odbc_connect),
         mysql=get_insert("MySQL", mysql_connector.connect),
+        snowflake=snowflake_insert,
     )
     return function(
         dataframe,
@@ -147,6 +152,7 @@ def update(
         postgre=get_update("Postgre", psycopg2.connect),
         odbc=get_update("ODBC", odbc_connect),
         mysql=get_update("MySQL", mysql_connector.connect),
+        snowflake=get_update("Snowflake", snowflake.connector.connect),
     )
     return function(
         dataframe,
@@ -171,6 +177,7 @@ def execute_sql(sql_statement: str, connection_info: dict, query_params=None):
         postgre=get_execute_sql("Postgre", psycopg2.connect),
         odbc=get_execute_sql("ODBC", odbc_connect),
         mysql=get_execute_sql("MySQL", mysql_connector.connect),
+        snowflake=get_execute_sql("Snowflake", snowflake.connector.connect),
     )
     return function(sql_statement, info, query_params)
 
@@ -547,6 +554,99 @@ def _oracle_execute_statements(conn, cursor, host, statements, query_params=None
 
 
 ##########
+# Snowflake functions
+##########
+
+
+def snowflake_insert(
+    dataframe: pd.DataFrame,
+    table_identifier: str,
+    connection_info: dict,
+    pre_insert_statements: list[str] = None,
+    pre_insert_params: list = None,
+    max_error_proportion: float = 0.05,  # Not implemented!
+) -> pd.DataFrame:
+    """Snowflake-specific implementation of the insert task. This is the one task for Snowflake
+    that needs to be custom-defined because inserting large amounts of data requires the use of
+    staging files."""
+    # pylint:disable=too-many-locals
+    # pylint:disable=too-many-arguments
+
+    if pre_insert_statements is None:
+        pre_insert_statements = []
+    if max_error_proportion != 0.05:
+        raise ValueError(
+            "The max_error_proportion parameter is not supported for Snowflake databases due to how"
+            " errors are handled within a transaction."
+        )
+
+    # Parse the schema and table name and validate to avoid sql injection attacks
+    schema, table = table_identifier.split(".")
+    pattern = r"^[A-Za-z_][A-Za-z0-9_]{0,254}$"
+    if not re.match(pattern, schema) or not re.match(pattern, table):
+        raise ValueError(
+            f"Snowflake: Identifier {table_identifier} is not a valid schema.table name"
+        )
+    connection_info["schema"] = schema
+
+    # With autocommit as False, all DML in the context manager should execute as a single
+    # transaction and roll back upon any failure
+    with snowflake.connector.connect(**connection_info, autocommit=False) as conn:
+        host = _hostname(connection_info, "Snowflake")
+        cursor = conn.cursor()
+
+        _execute_statements(
+            "Snowflake",
+            conn,
+            cursor,
+            host,
+            pre_insert_statements,
+            pre_insert_params,
+        )
+
+        # Use the table stage to insert the data
+        # Start by clearing the stage
+        get_run_logger().info(
+            "Snowflake: Inserting into %s on %s",
+            table_identifier,
+            host,
+        )
+        cursor.execute(f"REMOVE @%{table}")
+
+        # Put the file using a unique filename
+        # We'll use an na_rep to distinguish between NULL and empty strings
+        filename = f"import_{util.now():%Y-%m-%d_%H-%M-%S}.csv"
+        file = io.BytesIO()
+        dataframe.to_csv(file, index=False, na_rep="#N/A")
+        file.seek(0)
+        cursor.execute(f"PUT file://{filename} @%{table}", file_stream=file)
+
+        # Copy into the table; no need to specify the filename since there is only one file in the
+        # table stage
+        # This should directly raise the first row-level error encountered: to get all errors,
+        # manually run COPY INTO in validation mode
+        cursor.execute(
+            f"""
+            COPY INTO {table}
+            FILE_FORMAT = (
+                TYPE = 'CSV'
+                PARSE_HEADER = TRUE
+                FIELD_OPTIONALLY_ENCLOSED_BY = "
+                ESCAPE_UNENCLOSED_FIELD = NONE
+                EMPTY_FIELD_AS_NULL = FALSE
+                NULL_IF = ('#N/A')
+            )
+            PURGE = TRUE"""
+        )
+
+    get_run_logger().info(
+        "Snowflake: Inserted %s rows (%s)",
+        len(dataframe),
+        util.sizeof_fmt(sum(dataframe.memory_usage())),
+    )
+
+
+##########
 # Helper function for ODBC connections
 ##########
 
@@ -590,10 +690,7 @@ def get_sql_extract(system_type, connection_func):
                 f"The lob_columns parameter is not supported for {system_type} databases."
             )
         with connection_func(**connection_info) as conn:
-            if system_type == "ODBC":
-                host = connection_info["server"]
-            else:
-                host = connection_info["host"]
+            host = _hostname(connection_info, system_type)
             sql_snip = " ".join(sql_query.split())[:200] + " ..."
             log_str = f"{system_type}: Reading from {host}: {sql_snip}"
             if query_params:
@@ -681,11 +778,8 @@ def get_insert(system_type, connection_func):
             pre_insert_statements = []
 
         with connection_func(**connection_info) as conn:
-            if system_type == "ODBC":
-                host = connection_info["server"]
-            else:
-                host = connection_info["host"]
             cursor = conn.cursor()
+            host = _hostname(connection_info, system_type)
 
             _execute_statements(
                 system_type,
@@ -751,7 +845,7 @@ def get_insert(system_type, connection_func):
 
 
 def get_update(system_type, connection_func):
-    """Returns an update task implementation spe3cific to the identified database system type"""
+    """Returns an update task implementation specific to the identified database system type"""
 
     def do_update(
         dataframe: pd.DataFrame,
@@ -766,6 +860,12 @@ def get_update(system_type, connection_func):
         # pylint:disable=too-many-locals
         # pylint:disable=too-many-arguments
         # pylint:disable=too-many-branches
+
+        if system_type == "Snowflake" and len(dataframe) > 100:
+            raise RuntimeError(
+                "The update task is not optimized for use with Snowflake for large datasets: "
+                f"dataframe length of {len(dataframe)} exceeds limit of 100."
+            )
 
         set_columns = [i for i in dataframe.columns if i not in match_on]
         if system_type == "ODBC":
@@ -800,10 +900,7 @@ def get_update(system_type, connection_func):
             pre_update_statements = []
 
         with connection_func(**connection_info) as conn:
-            if system_type == "ODBC":
-                host = connection_info["server"]
-            else:
-                host = connection_info["host"]
+            host = _hostname(connection_info, system_type)
             cursor = conn.cursor()
 
             _execute_statements(
@@ -911,3 +1008,11 @@ def _execute_statements(system_type, conn, cursor, host, statements, query_param
     except Exception:
         conn.rollback()
         raise
+
+
+def _hostname(connection_info, system_type):
+    if system_type == "ODBC":
+        return connection_info["server"]
+    if system_type == "Snowflake":
+        return f"{connection_info['warehouse']}.{connection_info['database']}"
+    return connection_info["host"]
