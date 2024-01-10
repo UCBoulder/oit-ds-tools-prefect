@@ -631,6 +631,7 @@ def snowflake_insert(
             FILE_FORMAT = (
                 TYPE = 'CSV'
                 PARSE_HEADER = TRUE
+                MATCH_BY_COLUMN_NAME = TRUE
                 FIELD_OPTIONALLY_ENCLOSED_BY = '"'
                 ESCAPE_UNENCLOSED_FIELD = NONE
                 EMPTY_FIELD_AS_NULL = FALSE
