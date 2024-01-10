@@ -27,7 +27,7 @@ import pyodbc
 from mysql import connector as mysql_connector
 from prefect import task, get_run_logger
 import pandas as pd
-import snowflake
+from snowflake import connector as snowflake_connector
 
 from . import util
 
@@ -68,7 +68,7 @@ def sql_extract(
         postgre=get_sql_extract("Postgre", psycopg2.connect),
         odbc=get_sql_extract("ODBC", odbc_connect),
         mysql=get_sql_extract("MySQL", mysql_connector.connect),
-        snowflake=get_sql_extract("Snowflake", snowflake.connector.connect),
+        snowflake=get_sql_extract("Snowflake", snowflake_connector.connect),
     )
     dataframe = function(
         sql_query, info, query_params, lob_columns, chunks_prefix, chunksize
@@ -152,7 +152,7 @@ def update(
         postgre=get_update("Postgre", psycopg2.connect),
         odbc=get_update("ODBC", odbc_connect),
         mysql=get_update("MySQL", mysql_connector.connect),
-        snowflake=get_update("Snowflake", snowflake.connector.connect),
+        snowflake=get_update("Snowflake", snowflake_connector.connect),
     )
     return function(
         dataframe,
@@ -177,7 +177,7 @@ def execute_sql(sql_statement: str, connection_info: dict, query_params=None):
         postgre=get_execute_sql("Postgre", psycopg2.connect),
         odbc=get_execute_sql("ODBC", odbc_connect),
         mysql=get_execute_sql("MySQL", mysql_connector.connect),
-        snowflake=get_execute_sql("Snowflake", snowflake.connector.connect),
+        snowflake=get_execute_sql("Snowflake", snowflake_connector.connect),
     )
     return function(sql_statement, info, query_params)
 
@@ -591,7 +591,7 @@ def snowflake_insert(
 
     # With autocommit as False, all DML in the context manager should execute as a single
     # transaction and roll back upon any failure
-    with snowflake.connector.connect(**connection_info, autocommit=False) as conn:
+    with snowflake_connector.connect(**connection_info, autocommit=False) as conn:
         host = _hostname(connection_info, "Snowflake")
         cursor = conn.cursor()
 
