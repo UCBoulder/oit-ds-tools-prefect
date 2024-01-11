@@ -235,12 +235,12 @@ def _oracle_host(dsn_string):
         return dsn_string.split("/")[0].split(":")[0].strip()
 
 
-def _oracle_cast(value):
+def _cast(value):
     # Convert Na-like objects to None
     if pd.isnull(value):
         return None
 
-    # Convert date-like objects to strings in the Oracle format
+    # Convert date-like objects to strings in ISO format
     if isinstance(value, (datetime.datetime, pd.Timestamp)):
         return value.strftime("%Y-%m-%d %H:%M:%S")
     if isinstance(value, datetime.date):
@@ -354,7 +354,7 @@ def oracle_insert(
     # Turn into a list of dicts
     # At the same time, convert all datatypes to strings to avoid weird Oracle type issues
     records = [
-        {k: _oracle_cast(v) for k, v in i.items()} for i in dataframe.to_dict("records")
+        {k: _cast(v) for k, v in i.items()} for i in dataframe.to_dict("records")
     ]
 
     with oracledb.connect(**connection_info) as conn:
@@ -450,7 +450,7 @@ def oracle_update(
     # Turn into a list of dicts
     # At the same time, convert all datatypes to strings to avoid weird Oracle type issues
     records = [
-        {k: _oracle_cast(v) for k, v in i.items()} for i in dataframe.to_dict("records")
+        {k: _cast(v) for k, v in i.items()} for i in dataframe.to_dict("records")
     ]
 
     with oracledb.connect(**connection_info) as conn:
@@ -758,10 +758,7 @@ def get_insert(system_type, connection_func):
                 + f'VALUES ({",".join(["?"] * len(dataframe.columns))})'
             )
             # Replace NA values with None and turn to list of lists
-            records = [
-                [None if pd.isnull(j) else j for j in i]
-                for i in dataframe.values.tolist()
-            ]
+            records = [[_cast(j) for j in i] for i in dataframe.values.tolist()]
         else:
             param_list = [f"%({i})s" for i in dataframe.columns]
             insert_sql = (
@@ -770,7 +767,7 @@ def get_insert(system_type, connection_func):
             )
             # Replace NA values with None and turn to list of dicts
             records = [
-                {k: None if pd.isnull(v) else v for k, v in i.items()}
+                {k: _cast(v) for k, v in i.items()}
                 for i in dataframe.to_dict("records")
             ]
 
@@ -874,12 +871,10 @@ def get_update(system_type, connection_func):
             match_list = [f"{i} = ?" for i in match_on]
             # Replace NA values with None and turn to list of lists
             set_values = [
-                [None if pd.isnull(j) else j for j in i]
-                for i in dataframe[set_columns].values.tolist()
+                [_cast(j) for j in i] for i in dataframe[set_columns].values.tolist()
             ]
             match_values = [
-                [None if pd.isnull(j) else j for j in i]
-                for i in dataframe[match_on].values.tolist()
+                [_cast(j) for j in i] for i in dataframe[match_on].values.tolist()
             ]
             # Combine lists from each group so they will insert into the update statement
             records = [l + r for l, r in zip(set_values, match_values)]
@@ -888,7 +883,7 @@ def get_update(system_type, connection_func):
             match_list = [f"{i} = %({i})s" for i in match_on]
             # Replace NA values with None and turn to list of dicts
             records = [
-                {k: None if pd.isnull(v) else v for k, v in i.items()}
+                {k: _cast(v) for k, v in i.items()}
                 for i in dataframe.to_dict("records")
             ]
         update_sql = (
