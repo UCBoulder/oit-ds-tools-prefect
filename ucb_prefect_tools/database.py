@@ -630,13 +630,12 @@ def snowflake_insert(
             COPY INTO {table}
             FILE_FORMAT = (
                 TYPE = 'CSV'
-                PARSE_HEADER = TRUE
-                MATCH_BY_COLUMN_NAME = TRUE
                 FIELD_OPTIONALLY_ENCLOSED_BY = '"'
                 ESCAPE_UNENCLOSED_FIELD = NONE
                 EMPTY_FIELD_AS_NULL = FALSE
                 NULL_IF = ('#N/A')
             )
+            MATCH_BY_COLUMN_NAME = 'CASE_INSENSITIVE'
             PURGE = TRUE"""
         )
 
