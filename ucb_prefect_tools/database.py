@@ -630,6 +630,7 @@ def snowflake_insert(
             COPY INTO {table}
             FILE_FORMAT = (
                 TYPE = 'CSV'
+                PARSE_HEADER = TRUE
                 FIELD_OPTIONALLY_ENCLOSED_BY = '"'
                 ESCAPE_UNENCLOSED_FIELD = NONE
                 EMPTY_FIELD_AS_NULL = FALSE
