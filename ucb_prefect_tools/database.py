@@ -235,21 +235,6 @@ def _oracle_host(dsn_string):
         return dsn_string.split("/")[0].split(":")[0].strip()
 
 
-def _cast(value):
-    # Convert Na-like objects to None
-    if pd.isnull(value):
-        return None
-
-    # Convert date-like objects to strings in ISO format
-    if isinstance(value, (datetime.datetime, pd.Timestamp)):
-        return value.strftime("%Y-%m-%d %H:%M:%S")
-    if isinstance(value, datetime.date):
-        return value.strftime("%Y-%m-%d 00:00:00")
-
-    # Return everything else as a string
-    return str(value)
-
-
 def oracle_sql_extract(
     sql_query: str,
     connection_info: dict,
@@ -757,7 +742,6 @@ def get_insert(system_type, connection_func):
                 f'INSERT INTO {table_identifier} ({",".join(list(dataframe.columns))}) '
                 + f'VALUES ({",".join(["?"] * len(dataframe.columns))})'
             )
-            # Replace NA values with None and turn to list of lists
             records = [[_cast(j) for j in i] for i in dataframe.values.tolist()]
         else:
             param_list = [f"%({i})s" for i in dataframe.columns]
@@ -765,7 +749,6 @@ def get_insert(system_type, connection_func):
                 f'INSERT INTO {table_identifier} ({",".join(list(dataframe.columns))}) '
                 + f'VALUES ({",".join(param_list)})'
             )
-            # Replace NA values with None and turn to list of dicts
             records = [
                 {k: _cast(v) for k, v in i.items()}
                 for i in dataframe.to_dict("records")
@@ -869,7 +852,6 @@ def get_update(system_type, connection_func):
         if system_type == "ODBC":
             set_list = [f"{i} = ?" for i in set_columns]
             match_list = [f"{i} = ?" for i in match_on]
-            # Replace NA values with None and turn to list of lists
             set_values = [
                 [_cast(j) for j in i] for i in dataframe[set_columns].values.tolist()
             ]
@@ -881,7 +863,6 @@ def get_update(system_type, connection_func):
         else:
             set_list = [f"{i} = %({i})s" for i in set_columns]
             match_list = [f"{i} = %({i})s" for i in match_on]
-            # Replace NA values with None and turn to list of dicts
             records = [
                 {k: _cast(v) for k, v in i.items()}
                 for i in dataframe.to_dict("records")
@@ -1010,5 +991,20 @@ def _hostname(connection_info, system_type):
     if system_type == "ODBC":
         return connection_info["server"]
     if system_type == "Snowflake":
-        return f"{connection_info['warehouse']}.{connection_info['database']}"
+        return f"{connection_info['database']} using {connection_info['warehouse']}"
     return connection_info["host"]
+
+
+def _cast(value):
+    # Convert Na-like objects to None
+    if pd.isnull(value):
+        return None
+
+    # Convert date-like objects to strings in ISO format
+    if isinstance(value, (datetime.datetime, pd.Timestamp)):
+        return value.strftime("%Y-%m-%d %H:%M:%S")
+    if isinstance(value, datetime.date):
+        return value.strftime("%Y-%m-%d 00:00:00")
+
+    # Return everything else as a string
+    return str(value)
