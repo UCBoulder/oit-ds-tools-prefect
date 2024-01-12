@@ -863,10 +863,13 @@ def get_update(system_type, connection_func):
         else:
             set_list = [f"{i} = %({i})s" for i in set_columns]
             match_list = [f"{i} = %({i})s" for i in match_on]
+            get_run_logger().warning(dataframe.to_dict("records"))
             records = [
                 {k: _cast(v) for k, v in i.items()}
                 for i in dataframe.to_dict("records")
             ]
+            get_run_logger().warning(records)
+            get_run_logger().warning(type(records[0]['grade_at']))
         update_sql = (
             f'UPDATE {table_identifier} SET {", ".join(set_list)} '
             + f'WHERE {" AND ".join(match_list)}'
