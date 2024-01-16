@@ -409,7 +409,7 @@ def sizeof_fmt(num: int) -> str:
 
 
 @task
-def to_csv(dataframe: pd.DataFrame) -> bytes:
+def df_to_csv(dataframe: pd.DataFrame) -> bytes:
     """Takes a dataframe and returns bytes for the data in CSV format"""
 
     return dataframe.to_csv(index=False).encode("utf-8")
