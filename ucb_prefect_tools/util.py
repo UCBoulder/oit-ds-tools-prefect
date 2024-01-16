@@ -16,6 +16,7 @@ from contextlib import contextmanager
 import asyncio
 import uuid
 
+import pandas as pd
 from prefect import task, get_run_logger, tags, context, deployments, settings
 from prefect.utilities.filesystem import create_default_ignore_file
 from prefect.filesystems import RemoteFileSystem
@@ -408,7 +409,7 @@ def sizeof_fmt(num: int) -> str:
 
 
 @task
-def to_csv(dataframe):
+def to_csv(dataframe: pd.DataFrame) -> bytes:
     """Takes a dataframe and returns bytes for the data in CSV format"""
 
     return dataframe.to_csv(index=False).encode("utf-8")
