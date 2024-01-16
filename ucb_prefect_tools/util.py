@@ -405,3 +405,10 @@ def sizeof_fmt(num: int) -> str:
             return f"{num:3.1f} {unit}"
         num /= 1024.0
     return f"{num:.1f} PB"
+
+
+@task
+def to_csv(dataframe):
+    """Takes a dataframe and returns bytes for the data in CSV format"""
+
+    return dataframe.to_csv(index=False).encode("utf-8")
