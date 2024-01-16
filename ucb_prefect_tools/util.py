@@ -26,6 +26,7 @@ from prefect_dask.task_runners import DaskTaskRunner
 import git
 import pytz
 
+
 # Overrideable settings related to deployments
 DOCKER_REGISTRY = "oit-data-services-docker-local.artifactory.colorado.edu"
 LOCAL_FLOW_FOLDER = "flows"
