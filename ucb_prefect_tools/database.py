@@ -18,6 +18,8 @@ the constructor indicated in the list above, with some exceptions:
 # pylint:disable=broad-except
 
 import datetime
+import io
+import re
 
 import oracledb
 import psycopg2
@@ -25,6 +27,7 @@ import pyodbc
 from mysql import connector as mysql_connector
 from prefect import task, get_run_logger
 import pandas as pd
+from snowflake import connector as snowflake_connector
 
 from . import util
 
@@ -65,6 +68,7 @@ def sql_extract(
         postgre=get_sql_extract("Postgre", psycopg2.connect),
         odbc=get_sql_extract("ODBC", odbc_connect),
         mysql=get_sql_extract("MySQL", mysql_connector.connect),
+        snowflake=get_sql_extract("Snowflake", snowflake_connector.connect),
     )
     dataframe = function(
         sql_query, info, query_params, lob_columns, chunks_prefix, chunksize
@@ -103,6 +107,7 @@ def insert(
         postgre=get_insert("Postgre", psycopg2.connect),
         odbc=get_insert("ODBC", odbc_connect),
         mysql=get_insert("MySQL", mysql_connector.connect),
+        snowflake=snowflake_insert,
     )
     return function(
         dataframe,
@@ -147,6 +152,7 @@ def update(
         postgre=get_update("Postgre", psycopg2.connect),
         odbc=get_update("ODBC", odbc_connect),
         mysql=get_update("MySQL", mysql_connector.connect),
+        snowflake=get_update("Snowflake", snowflake_connector.connect),
     )
     return function(
         dataframe,
@@ -171,6 +177,7 @@ def execute_sql(sql_statement: str, connection_info: dict, query_params=None):
         postgre=get_execute_sql("Postgre", psycopg2.connect),
         odbc=get_execute_sql("ODBC", odbc_connect),
         mysql=get_execute_sql("MySQL", mysql_connector.connect),
+        snowflake=get_execute_sql("Snowflake", snowflake_connector.connect),
     )
     return function(sql_statement, info, query_params)
 
@@ -226,21 +233,6 @@ def _oracle_host(dsn_string):
     except IndexError:
         # Now try it using Easy Connect syntax
         return dsn_string.split("/")[0].split(":")[0].strip()
-
-
-def _oracle_cast(value):
-    # Convert Na-like objects to None
-    if pd.isnull(value):
-        return None
-
-    # Convert date-like objects to strings in the Oracle format
-    if isinstance(value, (datetime.datetime, pd.Timestamp)):
-        return value.strftime("%Y-%m-%d %H:%M:%S")
-    if isinstance(value, datetime.date):
-        return value.strftime("%Y-%m-%d 00:00:00")
-
-    # Return everything else as a string
-    return str(value)
 
 
 def oracle_sql_extract(
@@ -347,7 +339,7 @@ def oracle_insert(
     # Turn into a list of dicts
     # At the same time, convert all datatypes to strings to avoid weird Oracle type issues
     records = [
-        {k: _oracle_cast(v) for k, v in i.items()} for i in dataframe.to_dict("records")
+        {k: _cast(v) for k, v in i.items()} for i in dataframe.to_dict("records")
     ]
 
     with oracledb.connect(**connection_info) as conn:
@@ -443,7 +435,7 @@ def oracle_update(
     # Turn into a list of dicts
     # At the same time, convert all datatypes to strings to avoid weird Oracle type issues
     records = [
-        {k: _oracle_cast(v) for k, v in i.items()} for i in dataframe.to_dict("records")
+        {k: _cast(v) for k, v in i.items()} for i in dataframe.to_dict("records")
     ]
 
     with oracledb.connect(**connection_info) as conn:
@@ -547,6 +539,100 @@ def _oracle_execute_statements(conn, cursor, host, statements, query_params=None
 
 
 ##########
+# Snowflake functions
+##########
+
+
+def snowflake_insert(
+    dataframe: pd.DataFrame,
+    table_identifier: str,
+    connection_info: dict,
+    pre_insert_statements: list[str] = None,
+    pre_insert_params: list = None,
+    max_error_proportion: float = 0.05,  # Not implemented!
+) -> pd.DataFrame:
+    """Snowflake-specific implementation of the insert task. This is the one task for Snowflake
+    that needs to be custom-defined because inserting large amounts of data requires the use of
+    staging files."""
+    # pylint:disable=too-many-locals
+    # pylint:disable=too-many-arguments
+
+    if pre_insert_statements is None:
+        pre_insert_statements = []
+    if max_error_proportion != 0.05:
+        raise ValueError(
+            "The max_error_proportion parameter is not supported for Snowflake databases due to how"
+            " errors are handled within a transaction."
+        )
+
+    # Parse the schema and table name and validate to avoid sql injection attacks
+    schema, table = table_identifier.split(".")
+    pattern = r"^[A-Za-z_][A-Za-z0-9_]{0,254}$"
+    if not re.match(pattern, schema) or not re.match(pattern, table):
+        raise ValueError(
+            f"Snowflake: Identifier {table_identifier} is not a valid schema.table name"
+        )
+    connection_info["schema"] = schema
+
+    # With autocommit as False, all DML in the context manager should execute as a single
+    # transaction and roll back upon any failure
+    with snowflake_connector.connect(**connection_info, autocommit=False) as conn:
+        host = _hostname(connection_info, "Snowflake")
+        cursor = conn.cursor()
+
+        _execute_statements(
+            "Snowflake",
+            conn,
+            cursor,
+            host,
+            pre_insert_statements,
+            pre_insert_params,
+        )
+
+        # Use the table stage to insert the data
+        # Start by clearing the stage
+        get_run_logger().info(
+            "Snowflake: Inserting into %s on %s",
+            table_identifier,
+            host,
+        )
+        cursor.execute(f"REMOVE @%{table}")
+
+        # Put the file using a unique filename
+        # We'll use an na_rep to distinguish between NULL and empty strings
+        filename = f"import_{util.now():%Y-%m-%d_%H-%M-%S}.csv"
+        file = io.BytesIO()
+        dataframe.to_csv(file, index=False, na_rep="#N/A")
+        file.seek(0)
+        cursor.execute(f"PUT file://{filename} @%{table}", file_stream=file)
+
+        # Copy into the table; no need to specify the filename since there is only one file in the
+        # table stage
+        # This should directly raise the first row-level error encountered: to get all errors,
+        # manually run COPY INTO in validation mode
+        cursor.execute(
+            f"""
+            COPY INTO {table}
+            FILE_FORMAT = (
+                TYPE = 'CSV'
+                PARSE_HEADER = TRUE
+                FIELD_OPTIONALLY_ENCLOSED_BY = '"'
+                ESCAPE_UNENCLOSED_FIELD = NONE
+                EMPTY_FIELD_AS_NULL = FALSE
+                NULL_IF = ('#N/A')
+            )
+            MATCH_BY_COLUMN_NAME = 'CASE_INSENSITIVE'
+            PURGE = TRUE"""
+        )
+
+    get_run_logger().info(
+        "Snowflake: Inserted %s rows (%s)",
+        len(dataframe),
+        util.sizeof_fmt(sum(dataframe.memory_usage())),
+    )
+
+
+##########
 # Helper function for ODBC connections
 ##########
 
@@ -590,10 +676,7 @@ def get_sql_extract(system_type, connection_func):
                 f"The lob_columns parameter is not supported for {system_type} databases."
             )
         with connection_func(**connection_info) as conn:
-            if system_type == "ODBC":
-                host = connection_info["server"]
-            else:
-                host = connection_info["host"]
+            host = _hostname(connection_info, system_type)
             sql_snip = " ".join(sql_query.split())[:200] + " ..."
             log_str = f"{system_type}: Reading from {host}: {sql_snip}"
             if query_params:
@@ -659,20 +742,15 @@ def get_insert(system_type, connection_func):
                 f'INSERT INTO {table_identifier} ({",".join(list(dataframe.columns))}) '
                 + f'VALUES ({",".join(["?"] * len(dataframe.columns))})'
             )
-            # Replace NA values with None and turn to list of lists
-            records = [
-                [None if pd.isnull(j) else j for j in i]
-                for i in dataframe.values.tolist()
-            ]
+            records = [[_cast(j) for j in i] for i in dataframe.values.tolist()]
         else:
             param_list = [f"%({i})s" for i in dataframe.columns]
             insert_sql = (
                 f'INSERT INTO {table_identifier} ({",".join(list(dataframe.columns))}) '
                 + f'VALUES ({",".join(param_list)})'
             )
-            # Replace NA values with None and turn to list of dicts
             records = [
-                {k: None if pd.isnull(v) else v for k, v in i.items()}
+                {k: _cast(v) for k, v in i.items()}
                 for i in dataframe.to_dict("records")
             ]
 
@@ -681,11 +759,8 @@ def get_insert(system_type, connection_func):
             pre_insert_statements = []
 
         with connection_func(**connection_info) as conn:
-            if system_type == "ODBC":
-                host = connection_info["server"]
-            else:
-                host = connection_info["host"]
             cursor = conn.cursor()
+            host = _hostname(connection_info, system_type)
 
             _execute_statements(
                 system_type,
@@ -751,7 +826,7 @@ def get_insert(system_type, connection_func):
 
 
 def get_update(system_type, connection_func):
-    """Returns an update task implementation spe3cific to the identified database system type"""
+    """Returns an update task implementation specific to the identified database system type"""
 
     def do_update(
         dataframe: pd.DataFrame,
@@ -767,27 +842,29 @@ def get_update(system_type, connection_func):
         # pylint:disable=too-many-arguments
         # pylint:disable=too-many-branches
 
+        if system_type == "Snowflake" and len(dataframe) > 100:
+            raise RuntimeError(
+                "The update task is not optimized for use with Snowflake for large datasets: "
+                f"dataframe length of {len(dataframe)} exceeds limit of 100."
+            )
+
         set_columns = [i for i in dataframe.columns if i not in match_on]
         if system_type == "ODBC":
             set_list = [f"{i} = ?" for i in set_columns]
             match_list = [f"{i} = ?" for i in match_on]
-            # Replace NA values with None and turn to list of lists
             set_values = [
-                [None if pd.isnull(j) else j for j in i]
-                for i in dataframe[set_columns].values.tolist()
+                [_cast(j) for j in i] for i in dataframe[set_columns].values.tolist()
             ]
             match_values = [
-                [None if pd.isnull(j) else j for j in i]
-                for i in dataframe[match_on].values.tolist()
+                [_cast(j) for j in i] for i in dataframe[match_on].values.tolist()
             ]
             # Combine lists from each group so they will insert into the update statement
             records = [l + r for l, r in zip(set_values, match_values)]
         else:
             set_list = [f"{i} = %({i})s" for i in set_columns]
             match_list = [f"{i} = %({i})s" for i in match_on]
-            # Replace NA values with None and turn to list of dicts
             records = [
-                {k: None if pd.isnull(v) else v for k, v in i.items()}
+                {k: _cast(v) for k, v in i.items()}
                 for i in dataframe.to_dict("records")
             ]
         update_sql = (
@@ -800,10 +877,7 @@ def get_update(system_type, connection_func):
             pre_update_statements = []
 
         with connection_func(**connection_info) as conn:
-            if system_type == "ODBC":
-                host = connection_info["server"]
-            else:
-                host = connection_info["host"]
+            host = _hostname(connection_info, system_type)
             cursor = conn.cursor()
 
             _execute_statements(
@@ -911,3 +985,26 @@ def _execute_statements(system_type, conn, cursor, host, statements, query_param
     except Exception:
         conn.rollback()
         raise
+
+
+def _hostname(connection_info, system_type):
+    if system_type == "ODBC":
+        return connection_info["server"]
+    if system_type == "Snowflake":
+        return f"{connection_info['database']} using {connection_info['warehouse']}"
+    return connection_info["host"]
+
+
+def _cast(value):
+    # Convert Na-like objects to None
+    if pd.isnull(value):
+        return None
+
+    # Convert date-like objects to strings in ISO format
+    if isinstance(value, (datetime.datetime, pd.Timestamp)):
+        return value.strftime("%Y-%m-%d %H:%M:%S")
+    if isinstance(value, datetime.date):
+        return value.strftime("%Y-%m-%d 00:00:00")
+
+    # Return everything else as a string
+    return str(value)
