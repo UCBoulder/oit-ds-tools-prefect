@@ -929,7 +929,7 @@ def onedrive_list(
 
     filenames = []
     url = (
-        f"https://graph.microsoft.com/v1.0/users('{owner}')/drive"
+        f"https://graph.microsoft.com/v1.0/users('{owner}')/drive/items"
         f"/root:{prefix}:/children?$top=200"
     )
 
