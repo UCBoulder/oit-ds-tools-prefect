@@ -16,6 +16,7 @@ the constructor indicated in the list above, with some exceptions:
 """
 
 # pylint:disable=broad-except
+# pylint:disable=too-many-lines
 
 import datetime
 import io
@@ -996,6 +997,10 @@ def _hostname(connection_info, system_type):
 
 
 def _cast(value):
+    # Return bytes as-is
+    if isinstance(value, bytes):
+        return value
+
     # Convert Na-like objects to None
     if pd.isnull(value):
         return None
