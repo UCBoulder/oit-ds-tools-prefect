@@ -203,25 +203,31 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch, label="
 
     # Get repo info
     inferred_label, repo_name, branch_name = _get_repo_info()
+    module_name = os.path.splitext(flow_filename)[0]
+    # Set label and deployment name based on label parameter
+    if label == "infer":
+        label = inferred_label
+        deployment_name = f"{repo_name} | {branch_name} | {module_name}"
+    else:
+        deployment_name = f"{repo_name} | {branch_name} (as {label}) | {module_name}"
+    storage_path = (
+        # Path must end in slash!
+        f"main/{repo_name}/"
+        if label == "main"
+        else f"{label}/{repo_name}/{branch_name}/"
+    )
+    image_uri = f"{DOCKER_REGISTRY}/{image_name}:{image_branch}"
+    flow_name = f"{repo_name} | {module_name}"
 
     # Temporarily change into the flows folder
     with _ChangeDir(LOCAL_FLOW_FOLDER):
+
         # Import the module and flow
-        module_name = os.path.splitext(flow_filename)[0]
         try:
             flow_function = getattr(sys.modules["__main__"], flow_function_name)
         except KeyError:
             module = importlib.import_module(module_name)
             flow_function = getattr(module, flow_function_name)
-
-        # Set label and deployment name based on label parameter
-        if label == "infer":
-            label = inferred_label
-            deployment_name = f"{repo_name} | {branch_name} | {module_name}"
-        else:
-            deployment_name = (
-                f"{repo_name} | {branch_name} (as {label}) | {module_name}"
-            )
 
         # Parse docstring fields and action on them as appropriate
         docstring_fields = parse_docstring_fields(
@@ -230,6 +236,7 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch, label="
             flow_function,
             {"tags": lambda x: all(i.strip() for i in x.split(","))},
         )
+
         # Additional tags are only included on main flows
         flow_tags = [label]
         additional_tags = [i.strip() for i in docstring_fields["tags"].split(",") if i]
@@ -238,31 +245,15 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch, label="
         elif additional_tags:
             print(f"Additional tags not added to dev deployment: {additional_tags}")
 
-        # Now we can setup infrastructure and deploy the flow
-        image_uri = f"{DOCKER_REGISTRY}/{image_name}:{image_branch}"
-        flow_function.name = f"{repo_name} | {module_name}"
-        deployment = deployments.Deployment.build_from_flow(
-            flow=flow_function,
-            name=deployment_name,
-            tags=flow_tags,
-            work_pool_name=f"{label}-agent",
-            work_queue_name=None,
-            infrastructure=_get_flow_infrastructure(image_uri),
-            storage=_get_flow_storage(),
-            # Path must end in slash!
-            path=(
-                f"main/{repo_name}/"
-                if label == "main"
-                else f"{label}/{repo_name}/{branch_name}/"
-            ),
+        return _deploy_to_agent(
+            flow_function,
+            image_uri,
+            flow_name,
+            deployment_name,
+            flow_tags,
+            label,
+            storage_path,
         )
-        deployment_id = deployment.apply(upload=True)
-        print(
-            f"Deployed {deployment.name}\n\tWork Pool: {deployment.work_pool_name}\n\t"
-            f"Docker image: {image_uri}\n\tTags: {flow_tags}\n\tDeployment URL: "
-            f"{settings.PREFECT_UI_URL.value()}/deployments/deployment/{deployment_id}"
-        )
-        return deployment_id
 
 
 class _ChangeDir:
@@ -304,12 +295,32 @@ def _get_repo_info():
     return label, repo_short_name, branch_name
 
 
-def _get_flow_infrastructure(image_uri):
-    return DockerContainer(
-        image=image_uri,
-        image_pull_policy="ALWAYS",
-        auto_remove=True,
+def _deploy_to_agent(
+    flow_function, image_uri, flow_name, deployment_name, flow_tags, label, storage_path
+):
+    # pylint:disable=too-many-arguments
+    flow_function.name = flow_name
+    deployment = deployments.Deployment.build_from_flow(
+        flow=flow_function,
+        name=deployment_name,
+        tags=flow_tags,
+        work_pool_name=f"{label}-agent",
+        work_queue_name=None,
+        infrastructure=DockerContainer(
+            image=image_uri,
+            image_pull_policy="ALWAYS",
+            auto_remove=True,
+        ),
+        storage=_get_flow_storage(),
+        path=storage_path,
     )
+    deployment_id = deployment.apply(upload=True)
+    print(
+        f"Deployed {deployment.name}\n\tWork Pool: {deployment.work_pool_name}\n\t"
+        f"Docker image: {image_uri}\n\tTags: {flow_tags}\n\tDeployment URL: "
+        f"{settings.PREFECT_UI_URL.value()}/deployments/deployment/{deployment_id}"
+    )
+    return deployment_id
 
 
 def _get_flow_storage(subfolder=None):
