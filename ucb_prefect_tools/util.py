@@ -16,13 +16,14 @@ from contextlib import contextmanager
 import asyncio
 import uuid
 
-from prefect import task, get_run_logger, tags, context, deployments, settings
+from prefect import task, get_run_logger, tags, context, deployments, settings, flow
 from prefect.utilities.filesystem import create_default_ignore_file
 from prefect.infrastructure import DockerContainer
 from prefect.blocks.system import Secret
 from prefect.client.orchestration import get_client
 from prefect_dask.task_runners import DaskTaskRunner
 from prefect_aws import S3Bucket
+from prefect_aws.deployments.steps import push_to_s3
 import git
 import pytz
 
@@ -237,17 +238,28 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch, label="
             {"tags": lambda x: all(i.strip() for i in x.split(","))},
         )
 
-        # Additional tags are only included on main flows
+        # Additional tags are only included on fully "main" flows
         flow_tags = [label]
         additional_tags = [i.strip() for i in docstring_fields["tags"].split(",") if i]
-        if label == "main":
+        if inferred_label == "main" and label == "main":
             flow_tags.extend(additional_tags)
         elif additional_tags:
             print(f"Additional tags not added to dev deployment: {additional_tags}")
 
-        return _deploy_to_agent(
-            flow_function,
+        # return _deploy_to_agent(
+        #     flow_function,
+        #     image_uri,
+        #     flow_name,
+        #     deployment_name,
+        #     flow_tags,
+        #     label,
+        #     storage_path,
+        # )
+
+        return _deploy_to_worker(
             image_uri,
+            module_name,
+            flow_function_name,
             flow_name,
             deployment_name,
             flow_tags,
@@ -293,6 +305,53 @@ def _get_repo_info():
     else:
         label = "dev"
     return label, repo_short_name, branch_name
+
+
+def _deploy_to_worker(
+    image_uri,
+    module_name,
+    flow_function_name,
+    flow_name,
+    deployment_name,
+    flow_tags,
+    label,
+    storage_path,
+):
+    # pylint:disable=too-many-arguments
+
+    # Get the storage bucket
+    bucket = _get_remote_storage(subfolder=storage_path)
+    # Now push the code to the bucket
+    # This step would need to be adjusted accordingly if not using minio storage
+    push_to_s3(
+        bucket=bucket.bucket_name,
+        folder=bucket.bucket_folder,
+        credentials={
+            "aws_access_key_id": bucket.credentials.minio_root_user,
+            "aws_secret_access_key": bucket.credentials.minio_root_password.get_secret_value(),
+        },
+        client_parameters=bucket.credentials.aws_client_parameters.get_params_override(),
+    )
+    # Now create the deployment based on the remote code we just pushed
+    flow_obj = flow.from_source(
+        source=bucket,
+        entrypoint=f"{module_name}.py:{flow_function_name}",
+    )
+    flow_obj.name = flow_name
+    work_pool_name = f"open-shift-{label}"
+    deployment_id = flow_obj.deploy(
+        name=deployment_name,
+        work_pool_name=work_pool_name,
+        image=image_uri,
+        build=False,
+        print_next_steps=False,
+    )
+    print(
+        f"Deployed {deployment_name}\n\tWork Pool: {work_pool_name}\n\t"
+        f"Docker image: {image_uri}\n\tTags: {flow_tags}\n\tDeployment URL: "
+        f"{settings.PREFECT_UI_URL.value()}/deployments/deployment/{deployment_id}"
+    )
+    return deployment_id
 
 
 def _deploy_to_agent(
