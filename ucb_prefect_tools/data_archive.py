@@ -390,7 +390,11 @@ def init(archive_path: str, overwrite: bool = False) -> None:
     and a file already exists at `archive_path`, then prints the results of `info` for it instead
     of replacing it with an empty file."""
 
-    archive_df = get_data(archive_path, include_deleted=True)
+    try:
+        archive_df = get_data(archive_path, include_deleted=True)
+
+    except FileNotFoundError:
+        archive_df = pd.DataFrame()
 
     if not archive_df.empty and not overwrite:
         # If archive exists and overwrite is False, print info about the existing archive
