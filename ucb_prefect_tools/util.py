@@ -338,7 +338,7 @@ def _deploy_to_worker(
         entrypoint=f"{module_name}.py:{flow_function_name}",
     )
     flow_obj.name = flow_name
-    work_pool_name = f"open-shift-{label}"
+    work_pool_name = f"k8s-{label}"
     deployment_id = flow_obj.deploy(
         name=deployment_name,
         work_pool_name=work_pool_name,
