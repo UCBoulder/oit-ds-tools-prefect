@@ -31,8 +31,10 @@ import pytz
 # Overrideable settings related to deployments
 DOCKER_REGISTRY = "oit-data-services-docker-local.artifactory.colorado.edu"
 LOCAL_FLOW_FOLDER = "flows"
-FLOW_STORAGE_CONNECTION_BLOCK = "ds-flow-storage"
 REPO_PREFIX = "oit-ds-flows-"
+# For example, dev flow code will be stored in the ds-flow-storage-dev storage block
+# and flow results will be stored in the ds-flow-storage-results storage block in Prefect Cloud
+FLOW_STORAGE_BLOCK_PREFIX = "ds-flow-storage-"
 
 # Timezone for `now` function
 TIMEZONE = "America/Denver"
@@ -133,7 +135,7 @@ def deployable(flow_obj):
         flow_obj.timeout_seconds = 8 * 3600
     if flow_obj.result_storage is None:
         # Terminal slash in the path is probably non-optional
-        flow_obj.result_storage = _get_remote_storage(subfolder="results/")
+        flow_obj.result_storage = _get_remote_storage("results")
     if flow_obj.task_runner is None:
         flow_obj.task_runner = (
             DaskTaskRunner(cluster_kwargs={"n_workers": 1, "threads_per_worker": 10}),
@@ -212,10 +214,11 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch, label="
     else:
         deployment_name = f"{repo_name} | {branch_name} (as {label}) | {module_name}"
     storage_path = (
+        # Note that this is relative to whatever bucket_folder might be defined in the S3 block
         # Path must end in slash!
-        f"main/{repo_name}/"
+        f"{repo_name}/"
         if label == "main"
-        else f"{label}/{repo_name}/{branch_name}/"
+        else f"{repo_name}/{branch_name}/"
     )
     image_uri = f"{DOCKER_REGISTRY}/{image_name}:{image_branch}"
     flow_name = f"{repo_name} | {module_name}"
@@ -225,16 +228,16 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch, label="
 
         # Import the module and flow
         try:
-            flow_function = getattr(sys.modules["__main__"], flow_function_name)
+            flow_obj = getattr(sys.modules["__main__"], flow_function_name)
         except KeyError:
             module = importlib.import_module(module_name)
-            flow_function = getattr(module, flow_function_name)
+            flow_obj = getattr(module, flow_function_name)
 
         # Parse docstring fields and action on them as appropriate
         docstring_fields = parse_docstring_fields(
             # Validate that "tags" is a list of 1 or more non-blank, comma-separated strings
             # e.g. "tag1,, tag2" would fail due to a blank string in the middle slot
-            flow_function,
+            flow_obj,
             {"tags": lambda x: all(i.strip() for i in x.split(","))},
         )
 
@@ -320,32 +323,29 @@ def _deploy_to_worker(
     # pylint:disable=too-many-arguments
 
     # Get the storage bucket
-    bucket = _get_remote_storage(subfolder=storage_path)
+    bucket = _get_remote_storage(label)
     # Now push the code to the bucket
     # This step would need to be adjusted accordingly if not using minio storage
     push_to_s3(
         bucket=bucket.bucket_name,
-        folder=bucket.bucket_folder,
+        folder=f"{label}/{storage_path}",
         credentials={
             "aws_access_key_id": bucket.credentials.minio_root_user,
             "aws_secret_access_key": bucket.credentials.minio_root_password.get_secret_value(),
         },
         client_parameters=bucket.credentials.aws_client_parameters.get_params_override(),
     )
-    # Now create the deployment based on the remote code we just pushed
-    flow_obj = flow.from_source(
-        source=bucket,
-        entrypoint=f"{module_name}.py:{flow_function_name}",
-    )
+    bucket.bucket_folder = f"{label}/{storage_path}"
+    flow_obj = flow.from_source(bucket, f"{module_name}.py:{flow_function_name}")
     flow_obj.name = flow_name
     work_pool_name = f"k8s-{label}"
-    deployment_id = flow_obj.deploy(
+    deployment = flow_obj.to_deployment(
         name=deployment_name,
         work_pool_name=work_pool_name,
-        image=image_uri,
-        build=False,
-        print_next_steps=False,
     )
+    # TODO: Prefect downloads the full bucket anyway based on the Prefect cloud block
+    deployment._path = f"{label}/{storage_path}"
+    deployment_id = deployment.apply(image=image_uri)
     print(
         f"Deployed {deployment_name}\n\tWork Pool: {work_pool_name}\n\t"
         f"Docker image: {image_uri}\n\tTags: {flow_tags}\n\tDeployment URL: "
@@ -355,12 +355,12 @@ def _deploy_to_worker(
 
 
 def _deploy_to_agent(
-    flow_function, image_uri, flow_name, deployment_name, flow_tags, label, storage_path
+    flow_obj, image_uri, flow_name, deployment_name, flow_tags, label, storage_path
 ):
     # pylint:disable=too-many-arguments
-    flow_function.name = flow_name
+    flow_obj.name = flow_name
     deployment = deployments.Deployment.build_from_flow(
-        flow=flow_function,
+        flow=flow_obj,
         name=deployment_name,
         tags=flow_tags,
         work_pool_name=f"{label}-agent",
@@ -370,7 +370,7 @@ def _deploy_to_agent(
             image_pull_policy="ALWAYS",
             auto_remove=True,
         ),
-        storage=_get_remote_storage(),
+        storage=_get_remote_storage(label),
         path=storage_path,
     )
     deployment_id = deployment.apply(upload=True)
@@ -382,11 +382,8 @@ def _deploy_to_agent(
     return deployment_id
 
 
-def _get_remote_storage(subfolder=None):
-    bucket = S3Bucket.load("dev-ds-flow-storage")
-    if subfolder:
-        bucket.bucket_folder = os.path.join(bucket.bucket_folder, subfolder)
-    return bucket
+def _get_remote_storage(suffix):
+    return S3Bucket.load(FLOW_STORAGE_BLOCK_PREFIX + suffix)
 
 
 def parse_docstring_fields(function, fields):
