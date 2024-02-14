@@ -141,7 +141,7 @@ def deployable(flow_obj):
     # Auto-generate the flow name based on the repo name (aka the cwd) and the flow file name
     flow_obj.name = (
         f"{os.path.basename(os.path.dirname(os.getcwd())).removeprefix(REPO_PREFIX)}"
-        f" | {os.path.splitext(os.path.basename(inspect.getfile(flow_obj.fn)))}"
+        f" | {os.path.splitext(os.path.basename(inspect.getfile(flow_obj.fn)))[0]}"
     )
     return flow_obj
 
