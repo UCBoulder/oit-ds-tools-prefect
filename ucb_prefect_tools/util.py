@@ -138,6 +138,10 @@ def deployable(flow_obj):
         flow_obj.task_runner = (
             DaskTaskRunner(cluster_kwargs={"n_workers": 1, "threads_per_worker": 10}),
         )
+    # Auto-generate the flow name based on the repo name (aka the cwd) and the flow file name
+    flow_obj.name = (
+        f"{os.getcwd().removeprefix(REPO_PREFIX)} | {flow_obj.fn.__module__}"
+    )
     return flow_obj
 
 
@@ -212,23 +216,23 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch, label="
     else:
         deployment_name = f"{repo_name} | {branch_name} (as {label}) | {module_name}"
     image_uri = f"{DOCKER_REGISTRY}/{image_name}:{image_branch}"
-    flow_name = f"{repo_name} | {module_name}"
+    work_pool_name = f"k8s-{label}"
 
     # Temporarily change into the flows folder
     with _ChangeDir(LOCAL_FLOW_FOLDER):
 
         # Import the module and flow
         try:
-            flow_obj = getattr(sys.modules["__main__"], flow_function_name)
+            flow_func = getattr(sys.modules["__main__"], flow_function_name)
         except KeyError:
             module = importlib.import_module(module_name)
-            flow_obj = getattr(module, flow_function_name)
+            flow_func = getattr(module, flow_function_name)
 
         # Parse docstring fields and action on them as appropriate
         docstring_fields = parse_docstring_fields(
             # Validate that "tags" is a list of 1 or more non-blank, comma-separated strings
             # e.g. "tag1,, tag2" would fail due to a blank string in the middle slot
-            flow_obj,
+            flow_func,
             {"tags": lambda x: all(i.strip() for i in x.split(","))},
         )
 
@@ -248,8 +252,6 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch, label="
             ),
             entrypoint=f"{LOCAL_FLOW_FOLDER}/{module_name}.py:{flow_function_name}",
         )
-        flow_obj.name = flow_name
-        work_pool_name = f"k8s-{label}"
         deployment_id = flow_obj.deploy(
             name=deployment_name,
             work_pool_name=work_pool_name,
