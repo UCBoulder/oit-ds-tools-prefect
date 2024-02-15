@@ -217,7 +217,6 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch, label="
     else:
         deployment_name = f"{repo_name} | {branch_name} (as {label}) | {module_name}"
     image_uri = f"{DOCKER_REGISTRY}/{image_name}:{image_branch}"
-    work_pool_name = f"k8s-{label}"
 
     # Temporarily change into the flows folder
     with _ChangeDir(LOCAL_FLOW_FOLDER):
@@ -234,7 +233,10 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch, label="
             # Validate that "tags" is a list of 1 or more non-blank, comma-separated strings
             # e.g. "tag1,, tag2" would fail due to a blank string in the middle slot
             flow_func,
-            {"tags": lambda x: all(i.strip() for i in x.split(","))},
+            {
+                "tags": lambda x: all(i.strip() for i in x.split(",")),
+                "size": lambda x: x in ["small", "large"],
+            },
         )
 
         # Additional tags are only included on fully "main" flows
@@ -245,6 +247,10 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch, label="
         elif additional_tags:
             print(f"Additional tags not added to dev deployment: {additional_tags}")
 
+        size = docstring_fields["size"]
+        if not size:
+            raise ValueError("No size specified in the docstring for this flow")
+        work_pool_name = f"k8s-{size}-{label}"
         flow_obj = flow.from_source(
             source=GitRepository(
                 url=f"https://github.com/{GITHUB_ORG}/{REPO_PREFIX}{repo_name}.git",
@@ -291,7 +297,7 @@ def _get_repo_info():
     # Raise error if current commit doesn't match origin commit
     if repo.head.commit != repo.remotes.origin.fetch()[0].commit:
         raise RuntimeError(
-            "You are attempting to deploy from `main`, but HEAD is not on the "
+            "You are attempting to deploy using Github, but HEAD is not on the "
             "same commit as remote `origin`. Push or pull changes to continue."
         )
     # Also raise error if working tree is dirty (not counting untracked files)
