@@ -247,10 +247,7 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch, label="
         elif additional_tags:
             print(f"Additional tags not added to dev deployment: {additional_tags}")
 
-        size = docstring_fields["size"]
-        if not size:
-            raise ValueError("No size specified in the docstring for this flow")
-        work_pool_name = f"k8s-{size}-{label}"
+        work_pool_name = f"k8s-{label}"
         flow_obj = flow.from_source(
             source=GitRepository(
                 url=f"https://github.com/{GITHUB_ORG}/{REPO_PREFIX}{repo_name}.git",
