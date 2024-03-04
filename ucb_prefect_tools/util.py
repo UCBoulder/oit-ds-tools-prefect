@@ -300,7 +300,7 @@ def _get_repo_info():
     # Also raise error if working tree is dirty (not counting untracked files)
     if repo.is_dirty():
         raise RuntimeError(
-            "You are attempting to deploy from `main`, but your working tree is not clean. "
+            "You are attempting to deploy using Github, but your working tree is not clean. "
             "Commit or discard changes to continue."
         )
     if branch_name == "main":
