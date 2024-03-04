@@ -16,23 +16,24 @@ from contextlib import contextmanager
 import asyncio
 import uuid
 
-from prefect import task, get_run_logger, tags, context, deployments, settings
+from prefect import task, get_run_logger, tags, context, deployments, settings, flow
 from prefect.utilities.filesystem import create_default_ignore_file
-from prefect.filesystems import RemoteFileSystem
-from prefect.infrastructure import DockerContainer
-from prefect.blocks.system import Secret, JSON
+from prefect.blocks.system import Secret
 from prefect.client.orchestration import get_client
+from prefect.runner.storage import GitRepository
 from prefect_dask.task_runners import DaskTaskRunner
+from prefect_aws import S3Bucket
 import git
 import pytz
 
 
 # Overrideable settings related to deployments
 DOCKER_REGISTRY = "oit-data-services-docker-local.artifactory.colorado.edu"
+GITHUB_ORG = "UCBoulder"
 LOCAL_FLOW_FOLDER = "flows"
-FLOW_STORAGE_CONNECTION_BLOCK = "ds-flow-storage"
 REPO_PREFIX = "oit-ds-flows-"
-
+GITHUB_SECRET_BLOCK = "github-pat"
+RESULT_STORAGE_BLOCK = "flow-result-storage"
 # Timezone for `now` function
 TIMEZONE = "America/Denver"
 
@@ -132,11 +133,16 @@ def deployable(flow_obj):
         flow_obj.timeout_seconds = 8 * 3600
     if flow_obj.result_storage is None:
         # Terminal slash in the path is probably non-optional
-        flow_obj.result_storage = _get_flow_storage(subfolder="results/")
+        flow_obj.result_storage = S3Bucket.load(RESULT_STORAGE_BLOCK)
     if flow_obj.task_runner is None:
         flow_obj.task_runner = (
             DaskTaskRunner(cluster_kwargs={"n_workers": 1, "threads_per_worker": 10}),
         )
+    # Auto-generate the flow name based on the repo name (aka the cwd) and the flow file name
+    flow_obj.name = (
+        f"{os.path.basename(os.path.dirname(os.getcwd())).removeprefix(REPO_PREFIX)}"
+        f" | {os.path.splitext(os.path.basename(inspect.getfile(flow_obj.fn)))[0]}"
+    )
     return flow_obj
 
 
@@ -203,62 +209,62 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch, label="
 
     # Get repo info
     inferred_label, repo_name, branch_name = _get_repo_info()
+    module_name = os.path.splitext(flow_filename)[0]
+    # Set label and deployment name based on label parameter
+    if label == "infer":
+        label = inferred_label
+        deployment_name = f"{repo_name} | {branch_name} | {module_name}"
+    else:
+        deployment_name = f"{repo_name} | {branch_name} (as {label}) | {module_name}"
+    image_uri = f"{DOCKER_REGISTRY}/{image_name}:{image_branch}"
 
     # Temporarily change into the flows folder
     with _ChangeDir(LOCAL_FLOW_FOLDER):
+
         # Import the module and flow
-        module_name = os.path.splitext(flow_filename)[0]
         try:
-            flow_function = getattr(sys.modules["__main__"], flow_function_name)
+            flow_func = getattr(sys.modules["__main__"], flow_function_name)
         except KeyError:
             module = importlib.import_module(module_name)
-            flow_function = getattr(module, flow_function_name)
-
-        # Set label and deployment name based on label parameter
-        if label == "infer":
-            label = inferred_label
-            deployment_name = f"{repo_name} | {branch_name} | {module_name}"
-        else:
-            deployment_name = (
-                f"{repo_name} | {branch_name} (as {label}) | {module_name}"
-            )
+            flow_func = getattr(module, flow_function_name)
 
         # Parse docstring fields and action on them as appropriate
         docstring_fields = parse_docstring_fields(
             # Validate that "tags" is a list of 1 or more non-blank, comma-separated strings
             # e.g. "tag1,, tag2" would fail due to a blank string in the middle slot
-            flow_function,
-            {"tags": lambda x: all(i.strip() for i in x.split(","))},
+            flow_func,
+            {
+                "tags": lambda x: all(i.strip() for i in x.split(",")),
+                "size": lambda x: x in ["small", "large"],
+            },
         )
-        # Additional tags are only included on main flows
+
+        # Additional tags are only included on fully "main" flows
         flow_tags = [label]
         additional_tags = [i.strip() for i in docstring_fields["tags"].split(",") if i]
-        if label == "main":
+        if inferred_label == "main" and label == "main":
             flow_tags.extend(additional_tags)
         elif additional_tags:
             print(f"Additional tags not added to dev deployment: {additional_tags}")
 
-        # Now we can setup infrastructure and deploy the flow
-        image_uri = f"{DOCKER_REGISTRY}/{image_name}:{image_branch}"
-        flow_function.name = f"{repo_name} | {module_name}"
-        deployment = deployments.Deployment.build_from_flow(
-            flow=flow_function,
-            name=deployment_name,
-            tags=flow_tags,
-            work_pool_name=f"{label}-agent",
-            work_queue_name=None,
-            infrastructure=_get_flow_infrastructure(image_uri),
-            storage=_get_flow_storage(),
-            # Path must end in slash!
-            path=(
-                f"main/{repo_name}/"
-                if label == "main"
-                else f"{label}/{repo_name}/{branch_name}/"
+        work_pool_name = f"k8s-{label}"
+        flow_obj = flow.from_source(
+            source=GitRepository(
+                url=f"https://github.com/{GITHUB_ORG}/{REPO_PREFIX}{repo_name}.git",
+                branch=branch_name,
+                credentials={"access_token": Secret.load(GITHUB_SECRET_BLOCK)},
             ),
+            entrypoint=f"{LOCAL_FLOW_FOLDER}/{module_name}.py:{flow_function_name}",
         )
-        deployment_id = deployment.apply(upload=True)
+        deployment_id = flow_obj.deploy(
+            name=deployment_name,
+            work_pool_name=work_pool_name,
+            image=image_uri,
+            build=False,
+            print_next_steps=False,
+        )
         print(
-            f"Deployed {deployment.name}\n\tWork Pool: {deployment.work_pool_name}\n\t"
+            f"Deployed {deployment_name}\n\tWork Pool: {work_pool_name}\n\t"
             f"Docker image: {image_uri}\n\tTags: {flow_tags}\n\tDeployment URL: "
             f"{settings.PREFECT_UI_URL.value()}/deployments/deployment/{deployment_id}"
         )
@@ -285,53 +291,23 @@ def _get_repo_info():
     repo_name = os.path.basename(repo.working_dir)
     repo_short_name = repo_name.removeprefix(REPO_PREFIX)
     branch_name = repo.active_branch.name
+    # Raise error if current commit doesn't match origin commit
+    if repo.head.commit != repo.remotes.origin.fetch()[0].commit:
+        raise RuntimeError(
+            "You are attempting to deploy using Github, but HEAD is not on the "
+            "same commit as remote `origin`. Push or pull changes to continue."
+        )
+    # Also raise error if working tree is dirty (not counting untracked files)
+    if repo.is_dirty():
+        raise RuntimeError(
+            "You are attempting to deploy using Github, but your working tree is not clean. "
+            "Commit or discard changes to continue."
+        )
     if branch_name == "main":
-        # For main, raise error if current commit doesn't match origin commit
-        if repo.head.commit != repo.remotes.origin.fetch()[0].commit:
-            raise RuntimeError(
-                "You are attempting to deploy from `main`, but HEAD is not on the "
-                "same commit as remote `origin`. Push or pull changes to continue."
-            )
-        # For main, also raise error if working tree is dirty (not counting untracked files)
-        if repo.is_dirty():
-            raise RuntimeError(
-                "You are attempting to deploy from `main`, but your working tree is not clean. "
-                "Commit or discard changes to continue."
-            )
         label = "main"
     else:
         label = "dev"
     return label, repo_short_name, branch_name
-
-
-def _get_flow_infrastructure(image_uri):
-    return DockerContainer(
-        image=image_uri,
-        image_pull_policy="ALWAYS",
-        auto_remove=True,
-    )
-
-
-def _get_flow_storage(subfolder=None):
-    storage_conn = reveal_secrets(JSON.load(FLOW_STORAGE_CONNECTION_BLOCK).value)
-    if storage_conn["system_type"] == "minio":
-        endpoint_url = storage_conn["endpoint"]
-        if not endpoint_url.startswith("https://"):
-            endpoint_url = "https://" + endpoint_url
-        path = f's3://{storage_conn["bucket"]}/'
-        if subfolder:
-            path = os.path.join(path, subfolder)
-        return RemoteFileSystem(
-            basepath=path,
-            settings={
-                "key": storage_conn["access_key"],
-                "secret": storage_conn["secret_key"],
-                "client_kwargs": {"endpoint_url": endpoint_url},
-            },
-        )
-    raise ValueError(
-        f'Flow storage connection system type {storage_conn["system_type"]} not supported'
-    )
 
 
 def parse_docstring_fields(function, fields):
