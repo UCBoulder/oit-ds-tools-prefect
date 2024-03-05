@@ -260,6 +260,7 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch, label="
             name=deployment_name,
             work_pool_name=work_pool_name,
             image=image_uri,
+            tags=flow_tags,
             build=False,
             print_next_steps=False,
         )
