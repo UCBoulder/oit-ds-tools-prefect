@@ -333,7 +333,7 @@ def oracle_insert(
     errors = 0
     insert_sql = (
         f'INSERT INTO {table_identifier} ({",".join(list(dataframe.columns))}) '
-        + f'VALUES ({",".join(":" + i for i in dataframe.columns)})'
+        + f'VALUES ({",".join(":" + i for i in dataframe.columns)}) '
         + append_clause
     )
     _prepare_oracle_connection(connection_info)
@@ -749,7 +749,7 @@ def get_insert(system_type, connection_func):
         if system_type == "ODBC":
             insert_sql = (
                 f'INSERT INTO {table_identifier} ({",".join(list(dataframe.columns))}) '
-                + f'VALUES ({",".join(["?"] * len(dataframe.columns))})'
+                + f'VALUES ({",".join(["?"] * len(dataframe.columns))}) '
                 + append_clause
             )
             records = [[_cast(j) for j in i] for i in dataframe.values.tolist()]
@@ -757,7 +757,7 @@ def get_insert(system_type, connection_func):
             param_list = [f"%({i})s" for i in dataframe.columns]
             insert_sql = (
                 f'INSERT INTO {table_identifier} ({",".join(list(dataframe.columns))}) '
-                + f'VALUES ({",".join(param_list)})'
+                + f'VALUES ({",".join(param_list)}) '
                 + append_clause
             )
             records = [
