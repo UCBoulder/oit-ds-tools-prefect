@@ -85,7 +85,7 @@ def insert(
     pre_insert_statements: list[str] = None,
     pre_insert_params: list = None,
     max_error_proportion: float = 0.05,
-    append_clause: str = "",
+    on_conflict: str = "",
 ) -> pd.DataFrame:
     """Takes a dataframe and table identifier and appends the data into that table.
     Dataframe columns must match table column names (case insensitive, order irrelevant).
@@ -99,7 +99,7 @@ def insert(
         each pre-insert statement (aka bind variables)
     :param max_error_proportion: If the proportion of failed insert rows is greater than this, the
         entire transaction is rolled back (including pre-insert statements)
-    :param append_clause: Optional SQL to be added to the end of the query
+    :param on_conflict: Optional SQL to be added to the end of the query to resolve constraint conflicts
     """
     # pylint:disable=too-many-arguments
 
@@ -119,7 +119,7 @@ def insert(
         pre_insert_statements,
         pre_insert_params,
         max_error_proportion,
-        append_clause,
+        on_conflict,
     )
 
 
@@ -323,18 +323,20 @@ def oracle_insert(
     pre_insert_statements: list[str] = None,
     pre_insert_params: list = None,
     max_error_proportion: float = 0.05,
-    append_clause: str = "",
+    on_conflict: str = "",
 ) -> pd.DataFrame:
     """Oracle-specific implementation of the insert task"""
     # pylint:disable=too-many-locals
     # pylint:disable=too-many-arguments
 
+    if on_conflict != "":
+        raise NotImplementedError("This database type does not support conflict resolution on insert")
+
     batch_size = 500
     errors = 0
     insert_sql = (
         f'INSERT INTO {table_identifier} ({",".join(list(dataframe.columns))}) '
-        + f'VALUES ({",".join(":" + i for i in dataframe.columns)}) '
-        + append_clause
+        + f'VALUES ({",".join(":" + i for i in dataframe.columns)})'
     )
     _prepare_oracle_connection(connection_info)
     if "encoding" not in connection_info:
@@ -556,7 +558,7 @@ def snowflake_insert(
     pre_insert_statements: list[str] = None,
     pre_insert_params: list = None,
     max_error_proportion: float = 0.05,  # Not implemented!
-    append_clause: str = ""
+    on_conflict: str = ""
 ) -> pd.DataFrame:
     """Snowflake-specific implementation of the insert task. This is the one task for Snowflake
     that needs to be custom-defined because inserting large amounts of data requires the use of
@@ -571,6 +573,8 @@ def snowflake_insert(
             "The max_error_proportion parameter is not supported for Snowflake databases due to how"
             " errors are handled within a transaction."
         )
+    if on_conflict != "":
+        raise NotImplementedError("This database type does not support conflict resolution on insert")
 
     # Parse the schema and table name and validate to avoid sql injection attacks
     schema, table = table_identifier.split(".")
@@ -630,7 +634,7 @@ def snowflake_insert(
             )
             MATCH_BY_COLUMN_NAME = 'CASE_INSENSITIVE'
             PURGE = TRUE
-            {append_clause}"""
+            """
         )
 
     get_run_logger().info(
@@ -739,7 +743,7 @@ def get_insert(system_type, connection_func):
         pre_insert_statements: list[str] = None,
         pre_insert_params: list = None,
         max_error_proportion: float = 0.05,
-        append_clause: str = "",
+        on_conflict: str = "",
     ) -> pd.DataFrame:
         """System-specific implementation of the insert task"""
         # pylint:disable=too-many-locals
@@ -750,7 +754,7 @@ def get_insert(system_type, connection_func):
             insert_sql = (
                 f'INSERT INTO {table_identifier} ({",".join(list(dataframe.columns))}) '
                 + f'VALUES ({",".join(["?"] * len(dataframe.columns))}) '
-                + append_clause
+                + on_conflict
             )
             records = [[_cast(j) for j in i] for i in dataframe.values.tolist()]
         else:
@@ -758,7 +762,7 @@ def get_insert(system_type, connection_func):
             insert_sql = (
                 f'INSERT INTO {table_identifier} ({",".join(list(dataframe.columns))}) '
                 + f'VALUES ({",".join(param_list)}) '
-                + append_clause
+                + on_conflict
             )
             records = [
                 {k: _cast(v) for k, v in i.items()}
