@@ -329,8 +329,10 @@ def oracle_insert(
     # pylint:disable=too-many-locals
     # pylint:disable=too-many-arguments
 
-    if on_conflict != "":
-        raise NotImplementedError("This database type does not support conflict resolution on insert")
+    if on_conflict:
+        raise NotImplementedError(
+            "This database type does not support conflict resolution on insert"
+        )
 
     batch_size = 500
     errors = 0
@@ -558,7 +560,7 @@ def snowflake_insert(
     pre_insert_statements: list[str] = None,
     pre_insert_params: list = None,
     max_error_proportion: float = 0.05,  # Not implemented!
-    on_conflict: str = ""
+    on_conflict: str = "",
 ) -> pd.DataFrame:
     """Snowflake-specific implementation of the insert task. This is the one task for Snowflake
     that needs to be custom-defined because inserting large amounts of data requires the use of
@@ -573,8 +575,10 @@ def snowflake_insert(
             "The max_error_proportion parameter is not supported for Snowflake databases due to how"
             " errors are handled within a transaction."
         )
-    if on_conflict != "":
-        raise NotImplementedError("This database type does not support conflict resolution on insert")
+    if on_conflict:
+        raise NotImplementedError(
+            "This database type does not support conflict resolution on insert"
+        )
 
     # Parse the schema and table name and validate to avoid sql injection attacks
     schema, table = table_identifier.split(".")
