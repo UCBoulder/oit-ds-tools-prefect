@@ -148,7 +148,8 @@ def deployable(flow_obj):
 
 def run_flow_command_line_interface(flow_filename, flow_function_name, args=None):
     """Provides a command line interface for running and deploying a flow. If args is none, will
-    use sys.argv"""
+    use sys.argv."""
+    # TODO: explain docstring fields and CL options here in this docstring
     # pylint:disable=too-many-locals
 
     if args is None:
@@ -235,17 +236,14 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch, label="
             flow_func,
             {
                 "tags": lambda x: all(i.strip() for i in x.split(",")),
-                "size": lambda x: x in ["small", "large"],
+                "size": lambda x: x in ["small", "large"],  # not implemented yet
+                "schedule": bool,  # just ensure it's there for now
             },
         )
 
         # Additional tags are only included on fully "main" flows
         flow_tags = [label]
         additional_tags = [i.strip() for i in docstring_fields["tags"].split(",") if i]
-        if inferred_label == "main" and label == "main":
-            flow_tags.extend(additional_tags)
-        elif additional_tags:
-            print(f"Additional tags not added to dev deployment: {additional_tags}")
 
         work_pool_name = f"k8s-{label}"
         flow_obj = flow.from_source(
@@ -256,19 +254,44 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch, label="
             ),
             entrypoint=f"{LOCAL_FLOW_FOLDER}/{module_name}.py:{flow_function_name}",
         )
-        deployment_id = flow_obj.deploy(
-            name=deployment_name,
-            work_pool_name=work_pool_name,
-            image=image_uri,
-            tags=flow_tags,
-            build=False,
-            print_next_steps=False,
-        )
-        print(
-            f"Deployed {deployment_name}\n\tWork Pool: {work_pool_name}\n\t"
-            f"Docker image: {image_uri}\n\tTags: {flow_tags}\n\tDeployment URL: "
-            f"{settings.PREFECT_UI_URL.value()}/deployments/deployment/{deployment_id}"
-        )
+        if inferred_label == "main" and label == "main":
+            flow_tags.extend(additional_tags)
+            deployment_id = flow_obj.deploy(
+                name=deployment_name,
+                work_pool_name=work_pool_name,
+                image=image_uri,
+                tags=flow_tags,
+                cron=docstring_fields["schedule"],
+                # We don't currently support non-scheduled main deployments
+                is_schedule_active=True,
+                build=False,
+                print_next_steps=False,
+            )
+            print(
+                f"Deployed {deployment_name}\n\tWork Pool: {work_pool_name}\n\t"
+                f"Docker image: {image_uri}\n\tTags: {flow_tags}\n\t"
+                f"Schedule: {docstring_fields['schedule']}\n\tDeployment URL: "
+                f"{settings.PREFECT_UI_URL.value()}/deployments/deployment/{deployment_id}"
+            )
+        else:
+            deployment_id = flow_obj.deploy(
+                name=deployment_name,
+                work_pool_name=work_pool_name,
+                image=image_uri,
+                tags=flow_tags,
+                build=False,
+                print_next_steps=False,
+            )
+            print(
+                f"Deployed {deployment_name}\n\tWork Pool: {work_pool_name}\n\t"
+                f"Docker image: {image_uri}\n\tTags: {flow_tags}\n\tDeployment URL: "
+                f"{settings.PREFECT_UI_URL.value()}/deployments/deployment/{deployment_id}"
+            )
+            print(
+                f"Schedule not applied to dev deployment: {docstring_fields['schedule']}"
+            )
+            if additional_tags:
+                print(f"Additional tags not added to dev deployment: {additional_tags}")
         return deployment_id
 
 
