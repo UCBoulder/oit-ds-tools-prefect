@@ -1,6 +1,7 @@
 """General utility functions to make flows easier to implement with Prefect Cloud"""
 
 import inspect
+import json
 import re
 import argparse
 import importlib
@@ -21,6 +22,7 @@ from prefect.utilities.filesystem import create_default_ignore_file
 from prefect.blocks.system import Secret
 from prefect.client.orchestration import get_client
 from prefect.runner.storage import GitRepository
+from prefect.server.schemas.schedules import CronSchedule
 from prefect_dask.task_runners import DaskTaskRunner
 from prefect_aws import S3Bucket
 import git
@@ -156,7 +158,7 @@ def run_flow_command_line_interface(flow_filename, flow_function_name, args=None
         args = sys.argv[1:]
     parser = argparse.ArgumentParser()
     parser.add_argument("command", choices=["deploy", "run"])
-    parser.add_argument("--image-name", type=str, default="oit-ds-prefect-default")
+    parser.add_argument("--image-name", type=str, default="infer")
     parser.add_argument("--image-branch", type=str, default="main")
     parser.add_argument("--label", type=str, default="infer")
     parsed_args = parser.parse_args(args)
@@ -198,6 +200,7 @@ async def _delete_deployment(deployment_id):
 
 def _deploy(flow_filename, flow_function_name, image_name, image_branch, label="infer"):
     # pylint: disable=too-many-locals
+    # TODO: add "troubleshooting note" or something to docstring
 
     # Check file locations
     if create_default_ignore_file(LOCAL_FLOW_FOLDER):
@@ -217,7 +220,6 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch, label="
         deployment_name = f"{repo_name} | {branch_name} | {module_name}"
     else:
         deployment_name = f"{repo_name} | {branch_name} (as {label}) | {module_name}"
-    image_uri = f"{DOCKER_REGISTRY}/{image_name}:{image_branch}"
 
     # Temporarily change into the flows folder
     with _ChangeDir(LOCAL_FLOW_FOLDER):
@@ -230,21 +232,30 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch, label="
             flow_func = getattr(module, flow_function_name)
 
         # Parse docstring fields and action on them as appropriate
+        required_fields = ["schedule", "image_name", "main_params"]
+        optional_fields = ["tags", "source_systems", "sink_systems", "customer_contact"]
         docstring_fields = parse_docstring_fields(
-            # Validate that "tags" is a list of 1 or more non-blank, comma-separated strings
-            # e.g. "tag1,, tag2" would fail due to a blank string in the middle slot
-            flow_func,
-            {
-                "tags": lambda x: all(i.strip() for i in x.split(",")),
-                "size": lambda x: x in ["small", "large"],  # not implemented yet
-                "schedule": bool,  # just ensure it's there for now
-            },
+            flow_func, required_fields + optional_fields
         )
+        # :tags: is the only optional label
+        for field in required_fields:
+            if not docstring_fields[field]:
+                raise ValueError(f"Label :{field}: is required in flow docstring")
 
-        # Additional tags are only included on fully "main" flows
+        # Validate and apply docstring fields
         flow_tags = [label]
-        additional_tags = [i.strip() for i in docstring_fields["tags"].split(",") if i]
+        additional_tags = [
+            i.strip() for i in docstring_fields["tags"].split(",") if i.strip()
+        ]
+        if image_name == "infer":
+            image_name = docstring_fields["image_name"]
+        image_uri = f"{DOCKER_REGISTRY}/{image_name}:{image_branch}"
+        try:
+            main_params = json.loads(docstring_fields["main_params"])
+        except json.decoder.JSONDecodeError as err:
+            raise ValueError(":main_params: label must provide valid JSON") from err
 
+        # Deploy
         work_pool_name = f"k8s-{label}"
         flow_obj = flow.from_source(
             source=GitRepository(
@@ -256,14 +267,19 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch, label="
         )
         if inferred_label == "main" and label == "main":
             flow_tags.extend(additional_tags)
+            if docstring_fields["schedule"] == "None":
+                schedule = None
+            else:
+                schedule = CronSchedule(
+                    cron=docstring_fields["schedule"], timezone=TIMEZONE
+                )
             deployment_id = flow_obj.deploy(
                 name=deployment_name,
                 work_pool_name=work_pool_name,
                 image=image_uri,
                 tags=flow_tags,
-                cron=docstring_fields["schedule"],
-                # We don't currently support non-scheduled main deployments
-                is_schedule_active=True,
+                schedule=schedule,
+                parameters=main_params,
                 build=False,
                 print_next_steps=False,
             )
@@ -287,11 +303,14 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch, label="
                 f"Docker image: {image_uri}\n\tTags: {flow_tags}\n\tDeployment URL: "
                 f"{settings.PREFECT_UI_URL.value()}/deployments/deployment/{deployment_id}"
             )
-            print(
-                f"Schedule not applied to dev deployment: {docstring_fields['schedule']}"
-            )
+            if docstring_fields["schedule"] != "None":
+                print(
+                    f"\tSchedule not applied to dev deployment: {docstring_fields['schedule']}"
+                )
             if additional_tags:
-                print(f"Additional tags not added to dev deployment: {additional_tags}")
+                print(
+                    f"\tAdditional tags not added to dev deployment: {additional_tags}"
+                )
         return deployment_id
 
 
@@ -334,36 +353,64 @@ def _get_repo_info():
     return label, repo_short_name, branch_name
 
 
-def parse_docstring_fields(function, fields):
-    """Takes a function and a dictionary of field names mapped to functions that take field values
-    and return False if the field values are not valid. Looks at the function docstring and extracts
-    any Sphinx-style field labels (like `:tags: crm-ops`) from the docstring. If any key in `fields`
-    is not present in the docstring, its value is set to ''. Otherwise, values (like 'crm-ops')
-    are passed to the corresponding function given in the `fields` dict to ensure they are valid.
-    Finally, we return a dictionary mapping field keys to values from the actual docstring.
+def parse_docstring_fields(function: callable, allowed_fields: list):
+    """Looks at the given function docstring and extracts any Sphinx-style field labels (like
+    `:tags: crm-ops`) from the docstring that match those listed by `fields`. If any item in
+    `fields` is not present in the docstring, its value is set to None. Finally, return a dictionary
+    mapping field keys to values from the actual docstring.
 
-    Raises ValueError if a label (e.g. `:tags:`) appears more than once in the docstring.
+    Note that field names cannot contain whitespace, though their values can.
+
+    Raises ValueError if a field name (e.g. `:tags:`) appears more than once in the docstring.
+    Raises ValueError if a field name (e.g. `:bad_label:`) is in the docstring but not in `fields`.
     """
 
     docstring = inspect.getdoc(function)
-    result = {i: "" for i in fields.keys()}
+    result = {}
     if docstring:
-        for field, validator in fields.items():
-            pattern = re.compile(rf"^\s*:{field}:\s*(.*)", re.MULTILINE)
-            matches = pattern.findall(docstring)
-            # Check just one value found and that it is a valid value
-            if len(matches) == 1:
-                value = matches[0].strip()
-                if not validator(value):
+        # Bare regex isn't quite strong enough to allow for multi-line values for each label
+        # So we have to work line-by-line through the docstring
+        lines = docstring.split("\n")
+
+        # Find field labels and their corresponding values
+        field = None
+        value = []
+        for line in lines:
+            # See if this line is the start of a new field
+            match = re.match(r"^\s*:(\w+):\s*(.*)", line)
+            if match:
+                # Yes, we found a new label and thus we will start capturing a new field
+                if field:
+                    # First, if we were previously capturing a field-value, tie that off now
+                    result[field] = " ".join(value).strip()
+                # Now validate the new field
+                field, val = match.groups()
+                if field not in allowed_fields:
                     raise ValueError(
-                        f"Value '{value}' of field '{field}' in flow docstring is not allowed"
+                        f"Label '{field}' found in docstring is not valid; "
+                        f"must be one of: {allowed_fields}"
                     )
-                result[field] = value
-            elif len(matches) > 1:
-                raise ValueError(
-                    f"Found {len(matches)} entries for '{field}' in flow docstring; "
-                    "must have at most 1"
-                )
+                if field in result:
+                    raise ValueError(
+                        f"Found multiple entries for '{field}' in flow docstring; "
+                        "must have at most 1"
+                    )
+                # And begin capturing the new value
+                value = [val.strip()]
+            else:
+                if field:
+                    # This line isn't a new field, but we already started capturing a previous one
+                    # So add this line to that field's value
+                    value.append(line.strip())
+
+        # We've reached the end of the document, so tie off the last field we were capturing
+        if field:
+            result[field] = " ".join(value).strip()
+
+    # Set default values for fields not present in the docstring
+    for field in allowed_fields:
+        if field not in result:
+            result[field] = None
     return result
 
 
