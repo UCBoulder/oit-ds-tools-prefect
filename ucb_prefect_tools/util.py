@@ -150,8 +150,52 @@ def deployable(flow_obj):
 
 def run_flow_command_line_interface(flow_filename, flow_function_name, args=None):
     """Provides a command line interface for running and deploying a flow. If args is none, will
-    use sys.argv."""
-    # TODO: explain docstring fields and CL options here in this docstring
+    use sys.argv.
+
+    The first command-line arg must be either `deploy` or `run`. Deploy will deploy the flow
+    based on a combination of any CL options and the flow's docstring fields. Run will deploy the
+    flow, run it via Prefect Cloud, then delete the deployment afterward; as such, it is useful
+    for testing.
+
+    Your git repo must be "clean" in order to deploy, meaning you have no uncommitted changes and
+    you are up to date with your remote branch. This is because Prefect will pull your code from
+    Github when running the flow.
+
+    Command-line options:
+
+        `--image-name`: Change what image to use for deployment from what is specified in the flow
+            docstring
+        `--image-branch`: Change the image branch, aka mage label, to use. By default, when you are
+            on the `main` git branch, this will be `main`, and when you are on any other branch,
+            this will be the same as the branch name. See the oit-ds-tools-prefect-images repo for
+            information about building images.
+        `--label`: This determines what work pool will be used for the deployment. Options are
+            `main` or `dev`, and the default is based on the current git branch. If you deploy a
+            main flow with the dev label, it will act like a dev deployment with no schedule, error
+            notifications, etc. If you deploy a dev flow with a main label, it will run just like
+            a dev deployment except using the main namespace in Kubernetes. You could also create
+            a new work pool/namespace and point the deployment at it using this option.
+
+    When deploying a flow, the following Sphinx-style docstring fields are used to define certain
+    parameters (see oit-ds-flows-template for an example):
+
+        main_params: A json-style dict of parameter overrides to use for flow runs when deployed
+            from the main branch. At the very least, the env param should be overridden to "prod"
+            from it's usual default of "dev".
+        schedule: A cron string giving the schedule to be applied to the main-branch deployment.
+            This will use the common America/Denver timezone used by ucb_prefect_tools.
+        image_name: The image to use for this flow, usually just oit-ds-prefect-default.
+        tags: (Optional) Any additional tags to apply to main-branch deployments of this flow. At
+            least list the autotest tag for flows which can safely be run with default (i.e. dev)
+            parameters as part of automated testing.
+        source_systems: An informal list of systems from which this flow pulls data. Make it helpful
+            to non-engineers: e.g. instead of "CUTransfer", say "Bookstore (CUTransfer)"
+        sink_systems: Same as source systems, but for places where the data is being sent.
+        customer_contact: A comma-separated list of email addresses of people or teams to reach out
+            to if we have questions about the flow (typically on the "sink" side). Feel free to
+            include names or other info when needed for clarity.
+
+    """
     # pylint:disable=too-many-locals
 
     if args is None:
@@ -200,7 +244,7 @@ async def _delete_deployment(deployment_id):
 
 def _deploy(flow_filename, flow_function_name, image_name, image_branch, label="infer"):
     # pylint: disable=too-many-locals
-    # TODO: add "troubleshooting note" or something to docstring
+    # pylint: disable=too-many-branches
 
     # Check file locations
     if create_default_ignore_file(LOCAL_FLOW_FOLDER):
