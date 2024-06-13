@@ -148,7 +148,9 @@ def deployable(flow_obj):
     return flow_obj
 
 
-def run_flow_command_line_interface(flow_filename, flow_function_name, args=None):
+def run_flow_command_line_interface(
+    flow_filename: str, flow_function_name: str, args: list = None
+):
     """Provides a command line interface for running and deploying a flow. If args is none, will
     use sys.argv.
 
