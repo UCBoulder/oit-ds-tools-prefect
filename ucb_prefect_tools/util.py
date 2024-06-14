@@ -167,10 +167,12 @@ def run_flow_command_line_interface(
 
         `--image-name`: Change what image to use for deployment from what is specified in the flow
             docstring
-        `--image-branch`: Change the image branch, aka mage label, to use. By default, when you are
+
+        `--image-branch`: Change the image branch, aka image label, to use. By default, when you are
             on the `main` git branch, this will be `main`, and when you are on any other branch,
             this will be the same as the branch name. See the oit-ds-tools-prefect-images repo for
             information about building images.
+
         `--label`: This determines what work pool will be used for the deployment. Options are
             `main` or `dev`, and the default is based on the current git branch. If you deploy a
             main flow with the dev label, it will act like a dev deployment with no schedule, error
