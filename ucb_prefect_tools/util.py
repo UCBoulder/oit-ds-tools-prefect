@@ -253,6 +253,7 @@ async def _delete_deployment(deployment_id):
 def _deploy(flow_filename, flow_function_name, image_name, image_branch, label="infer"):
     # pylint: disable=too-many-locals
     # pylint: disable=too-many-branches
+    # pylint: disable=too-many-statements
 
     # Check file locations
     if create_default_ignore_file(LOCAL_FLOW_FOLDER):
@@ -292,9 +293,12 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch, label="
 
         # Validate and apply docstring fields
         flow_tags = [label]
-        additional_tags = [
-            i.strip() for i in docstring_fields["tags"].split(",") if i.strip()
-        ]
+        if docstring_fields["tags"]:
+            additional_tags = [
+                i.strip() for i in docstring_fields["tags"].split(",") if i.strip()
+            ]
+        else:
+            additional_tags = []
         if image_name == "infer":
             image_name = docstring_fields["image_name"]
         image_uri = f"{DOCKER_REGISTRY}/{image_name}:{image_branch}"
