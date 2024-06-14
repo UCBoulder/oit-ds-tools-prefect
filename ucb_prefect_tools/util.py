@@ -187,7 +187,11 @@ def run_flow_command_line_interface(
             from the main branch. At the very least, the env param should be overridden to "prod"
             from it's usual default of "dev".
         schedule: A cron string giving the schedule to be applied to the main-branch deployment.
-            This will use the common America/Denver timezone used by ucb_prefect_tools.
+            This will use the common America/Denver timezone used by ucb_prefect_tools. If no
+            schedule is desired, write `None` here. For new deployments, the schedule will be
+            active by default. But if someone manually disables a schedule for an existing
+            deployment, future redeploys will not reactivate that schedule by design: it must be
+            manually reactivated.
         image_name: The image to use for this flow, usually just oit-ds-prefect-default.
         tags: (Optional) Any additional tags to apply to main-branch deployments of this flow. At
             least list the autotest tag for flows which can safely be run with default (i.e. dev)
@@ -283,12 +287,8 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch, label="
         required_fields = ["schedule", "image_name", "main_params"]
         optional_fields = ["tags", "source_systems", "sink_systems", "customer_contact"]
         docstring_fields = parse_docstring_fields(
-            flow_func, required_fields + optional_fields
+            flow_func, required_fields, optional_fields
         )
-        # :tags: is the only optional label
-        for field in required_fields:
-            if not docstring_fields[field]:
-                raise ValueError(f"Label :{field}: is required in flow docstring")
 
         # Validate and apply docstring fields
         flow_tags = [label]
@@ -401,19 +401,25 @@ def _get_repo_info():
     return label, repo_short_name, branch_name
 
 
-def parse_docstring_fields(function: callable, allowed_fields: list):
+def parse_docstring_fields(
+    function: callable, required_fields: list, optional_fields: list
+):
     """Looks at the given function docstring and extracts any Sphinx-style field labels (like
-    `:tags: crm-ops`) from the docstring that match those listed by `fields`. If any item in
-    `fields` is not present in the docstring, its value is set to None. Finally, return a dictionary
-    mapping field keys to values from the actual docstring.
+    `:tags: crm-ops`) from the docstring that match those listed by `fields`. If field is not
+    present in the docstring, its value is set to None. Finally, return a dictionary mapping field
+    keys to values from the actual docstring.
 
-    Note that field names cannot contain whitespace, though their values can.
+    Note that field names cannot contain whitespace, though their values can, including line breaks.
+    Line breaks and associated extra whitespace are reduced to a single space each.
 
     Raises ValueError if a field name (e.g. `:tags:`) appears more than once in the docstring.
-    Raises ValueError if a field name (e.g. `:bad_label:`) is in the docstring but not in `fields`.
+    Raises ValueError if a field name (e.g. `:bad_label:`) is in the docstring but not in either
+        list of fields.
+    Raises ValueError if a required field is not in the docstring.
     """
 
     docstring = inspect.getdoc(function)
+    all_fields = list(set(optional_fields + required_fields))
     result = {}
     if docstring:
         # Bare regex isn't quite strong enough to allow for multi-line values for each label
@@ -433,10 +439,10 @@ def parse_docstring_fields(function: callable, allowed_fields: list):
                     result[field] = " ".join(value).strip()
                 # Now validate the new field
                 field, val = match.groups()
-                if field not in allowed_fields:
+                if field not in all_fields:
                     raise ValueError(
                         f"Label '{field}' found in docstring is not valid; "
-                        f"must be one of: {allowed_fields}"
+                        f"must be one of: {all_fields}"
                     )
                 if field in result:
                     raise ValueError(
@@ -455,8 +461,12 @@ def parse_docstring_fields(function: callable, allowed_fields: list):
         if field:
             result[field] = " ".join(value).strip()
 
+    # Check that all required fields were found
+    for field in required_fields:
+        if field not in result:
+            raise ValueError(f"Missing required field :{field}: in docstring")
     # Set default values for fields not present in the docstring
-    for field in allowed_fields:
+    for field in optional_fields:
         if field not in result:
             result[field] = None
     return result
