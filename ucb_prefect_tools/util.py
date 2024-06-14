@@ -1,6 +1,7 @@
 """General utility functions to make flows easier to implement with Prefect Cloud"""
 
 import inspect
+import json
 import re
 import argparse
 import importlib
@@ -21,6 +22,7 @@ from prefect.utilities.filesystem import create_default_ignore_file
 from prefect.blocks.system import Secret
 from prefect.client.orchestration import get_client
 from prefect.runner.storage import GitRepository
+from prefect.server.schemas.schedules import CronSchedule
 from prefect_dask.task_runners import DaskTaskRunner
 from prefect_aws import S3Bucket
 import git
@@ -146,16 +148,69 @@ def deployable(flow_obj):
     return flow_obj
 
 
-def run_flow_command_line_interface(flow_filename, flow_function_name, args=None):
+def run_flow_command_line_interface(
+    flow_filename: str, flow_function_name: str, args: list = None
+):
     """Provides a command line interface for running and deploying a flow. If args is none, will
-    use sys.argv"""
+    use sys.argv.
+
+    The first command-line arg must be either `deploy` or `run`. Deploy will deploy the flow
+    based on a combination of any CL options and the flow's docstring fields. Run will deploy the
+    flow, run it via Prefect Cloud, then delete the deployment afterward; as such, it is useful
+    for testing.
+
+    Your git repo must be "clean" in order to deploy, meaning you have no uncommitted changes and
+    you are up to date with your remote branch. This is because Prefect will pull your code from
+    Github when running the flow.
+
+    Command-line options:
+
+        `--image-name`: Change what image to use for deployment from what is specified in the flow
+            docstring
+
+        `--image-branch`: Change the image branch, aka image label, to use. By default, when you are
+            on the `main` git branch, this will be `main`, and when you are on any other branch,
+            this will be the same as the branch name. See the oit-ds-tools-prefect-images repo for
+            information about building images.
+
+        `--label`: This determines what work pool will be used for the deployment. Options are
+            `main` or `dev`, and the default is based on the current git branch. If you deploy a
+            main flow with the dev label, it will act like a dev deployment with no schedule, error
+            notifications, etc. If you deploy a dev flow with a main label, it will run just like
+            a dev deployment except using the main namespace in Kubernetes. You could also create
+            a new work pool/namespace and point the deployment at it using this option.
+
+    When deploying a flow, the following Sphinx-style docstring fields are used to define certain
+    parameters (see oit-ds-flows-template for an example):
+
+        main_params: A json-style dict of parameter overrides to use for flow runs when deployed
+            from the main branch. At the very least, the env param should be overridden to "prod"
+            from it's usual default of "dev".
+        schedule: A cron string giving the schedule to be applied to the main-branch deployment.
+            This will use the common America/Denver timezone used by ucb_prefect_tools. If no
+            schedule is desired, write `None` here. For new deployments, the schedule will be
+            active by default. But if someone manually disables a schedule for an existing
+            deployment, future redeploys will not reactivate that schedule by design: it must be
+            manually reactivated.
+        image_name: The image to use for this flow, usually just oit-ds-prefect-default.
+        tags: (Optional) Any additional tags to apply to main-branch deployments of this flow. At
+            least list the autotest tag for flows which can safely be run with default (i.e. dev)
+            parameters as part of automated testing.
+        source_systems: An informal list of systems from which this flow pulls data. Make it helpful
+            to non-engineers: e.g. instead of "CUTransfer", say "Bookstore (CUTransfer)"
+        sink_systems: Same as source systems, but for places where the data is being sent.
+        customer_contact: A comma-separated list of email addresses of people or teams to reach out
+            to if we have questions about the flow (typically on the "sink" side). Feel free to
+            include names or other info when needed for clarity.
+
+    """
     # pylint:disable=too-many-locals
 
     if args is None:
         args = sys.argv[1:]
     parser = argparse.ArgumentParser()
     parser.add_argument("command", choices=["deploy", "run"])
-    parser.add_argument("--image-name", type=str, default="oit-ds-prefect-default")
+    parser.add_argument("--image-name", type=str, default="infer")
     parser.add_argument("--image-branch", type=str, default="main")
     parser.add_argument("--label", type=str, default="infer")
     parsed_args = parser.parse_args(args)
@@ -197,6 +252,7 @@ async def _delete_deployment(deployment_id):
 
 def _deploy(flow_filename, flow_function_name, image_name, image_branch, label="infer"):
     # pylint: disable=too-many-locals
+    # pylint: disable=too-many-branches
 
     # Check file locations
     if create_default_ignore_file(LOCAL_FLOW_FOLDER):
@@ -216,7 +272,6 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch, label="
         deployment_name = f"{repo_name} | {branch_name} | {module_name}"
     else:
         deployment_name = f"{repo_name} | {branch_name} (as {label}) | {module_name}"
-    image_uri = f"{DOCKER_REGISTRY}/{image_name}:{image_branch}"
 
     # Temporarily change into the flows folder
     with _ChangeDir(LOCAL_FLOW_FOLDER):
@@ -229,24 +284,26 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch, label="
             flow_func = getattr(module, flow_function_name)
 
         # Parse docstring fields and action on them as appropriate
+        required_fields = ["schedule", "image_name", "main_params"]
+        optional_fields = ["tags", "source_systems", "sink_systems", "customer_contact"]
         docstring_fields = parse_docstring_fields(
-            # Validate that "tags" is a list of 1 or more non-blank, comma-separated strings
-            # e.g. "tag1,, tag2" would fail due to a blank string in the middle slot
-            flow_func,
-            {
-                "tags": lambda x: all(i.strip() for i in x.split(",")),
-                "size": lambda x: x in ["small", "large"],
-            },
+            flow_func, required_fields, optional_fields
         )
 
-        # Additional tags are only included on fully "main" flows
+        # Validate and apply docstring fields
         flow_tags = [label]
-        additional_tags = [i.strip() for i in docstring_fields["tags"].split(",") if i]
-        if inferred_label == "main" and label == "main":
-            flow_tags.extend(additional_tags)
-        elif additional_tags:
-            print(f"Additional tags not added to dev deployment: {additional_tags}")
+        additional_tags = [
+            i.strip() for i in docstring_fields["tags"].split(",") if i.strip()
+        ]
+        if image_name == "infer":
+            image_name = docstring_fields["image_name"]
+        image_uri = f"{DOCKER_REGISTRY}/{image_name}:{image_branch}"
+        try:
+            main_params = json.loads(docstring_fields["main_params"])
+        except json.decoder.JSONDecodeError as err:
+            raise ValueError(":main_params: label must provide valid JSON") from err
 
+        # Deploy
         work_pool_name = f"k8s-{label}"
         flow_obj = flow.from_source(
             source=GitRepository(
@@ -256,19 +313,52 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch, label="
             ),
             entrypoint=f"{LOCAL_FLOW_FOLDER}/{module_name}.py:{flow_function_name}",
         )
-        deployment_id = flow_obj.deploy(
-            name=deployment_name,
-            work_pool_name=work_pool_name,
-            image=image_uri,
-            tags=flow_tags,
-            build=False,
-            print_next_steps=False,
-        )
-        print(
-            f"Deployed {deployment_name}\n\tWork Pool: {work_pool_name}\n\t"
-            f"Docker image: {image_uri}\n\tTags: {flow_tags}\n\tDeployment URL: "
-            f"{settings.PREFECT_UI_URL.value()}/deployments/deployment/{deployment_id}"
-        )
+        if inferred_label == "main" and label == "main":
+            flow_tags.extend(additional_tags)
+            if docstring_fields["schedule"] == "None":
+                schedule = None
+            else:
+                schedule = CronSchedule(
+                    cron=docstring_fields["schedule"], timezone=TIMEZONE
+                )
+            deployment_id = flow_obj.deploy(
+                name=deployment_name,
+                work_pool_name=work_pool_name,
+                image=image_uri,
+                tags=flow_tags,
+                schedule=schedule,
+                parameters=main_params,
+                build=False,
+                print_next_steps=False,
+            )
+            print(
+                f"Deployed {deployment_name}\n\tWork Pool: {work_pool_name}\n\t"
+                f"Docker image: {image_uri}\n\tTags: {flow_tags}\n\t"
+                f"Schedule: {docstring_fields['schedule']}\n\tDeployment URL: "
+                f"{settings.PREFECT_UI_URL.value()}/deployments/deployment/{deployment_id}"
+            )
+        else:
+            deployment_id = flow_obj.deploy(
+                name=deployment_name,
+                work_pool_name=work_pool_name,
+                image=image_uri,
+                tags=flow_tags,
+                build=False,
+                print_next_steps=False,
+            )
+            print(
+                f"Deployed {deployment_name}\n\tWork Pool: {work_pool_name}\n\t"
+                f"Docker image: {image_uri}\n\tTags: {flow_tags}\n\tDeployment URL: "
+                f"{settings.PREFECT_UI_URL.value()}/deployments/deployment/{deployment_id}"
+            )
+            if docstring_fields["schedule"] != "None":
+                print(
+                    f"\tSchedule not applied to dev deployment: {docstring_fields['schedule']}"
+                )
+            if additional_tags:
+                print(
+                    f"\tAdditional tags not added to dev deployment: {additional_tags}"
+                )
         return deployment_id
 
 
@@ -311,36 +401,74 @@ def _get_repo_info():
     return label, repo_short_name, branch_name
 
 
-def parse_docstring_fields(function, fields):
-    """Takes a function and a dictionary of field names mapped to functions that take field values
-    and return False if the field values are not valid. Looks at the function docstring and extracts
-    any Sphinx-style field labels (like `:tags: crm-ops`) from the docstring. If any key in `fields`
-    is not present in the docstring, its value is set to ''. Otherwise, values (like 'crm-ops')
-    are passed to the corresponding function given in the `fields` dict to ensure they are valid.
-    Finally, we return a dictionary mapping field keys to values from the actual docstring.
+def parse_docstring_fields(
+    function: callable, required_fields: list, optional_fields: list
+):
+    """Looks at the given function docstring and extracts any Sphinx-style field labels (like
+    `:tags: crm-ops`) from the docstring that match those listed by `fields`. If field is not
+    present in the docstring, its value is set to None. Finally, return a dictionary mapping field
+    keys to values from the actual docstring.
 
-    Raises ValueError if a label (e.g. `:tags:`) appears more than once in the docstring.
+    Note that field names cannot contain whitespace, though their values can, including line breaks.
+    Line breaks and associated extra whitespace are reduced to a single space each.
+
+    Raises ValueError if a field name (e.g. `:tags:`) appears more than once in the docstring.
+    Raises ValueError if a field name (e.g. `:bad_label:`) is in the docstring but not in either
+        list of fields.
+    Raises ValueError if a required field is not in the docstring.
     """
 
     docstring = inspect.getdoc(function)
-    result = {i: "" for i in fields.keys()}
+    all_fields = list(set(optional_fields + required_fields))
+    result = {}
     if docstring:
-        for field, validator in fields.items():
-            pattern = re.compile(rf"^\s*:{field}:\s*(.*)", re.MULTILINE)
-            matches = pattern.findall(docstring)
-            # Check just one value found and that it is a valid value
-            if len(matches) == 1:
-                value = matches[0].strip()
-                if not validator(value):
+        # Bare regex isn't quite strong enough to allow for multi-line values for each label
+        # So we have to work line-by-line through the docstring
+        lines = docstring.split("\n")
+
+        # Find field labels and their corresponding values
+        field = None
+        value = []
+        for line in lines:
+            # See if this line is the start of a new field
+            match = re.match(r"^\s*:(\w+):\s*(.*)", line)
+            if match:
+                # Yes, we found a new label and thus we will start capturing a new field
+                if field:
+                    # First, if we were previously capturing a field-value, tie that off now
+                    result[field] = " ".join(value).strip()
+                # Now validate the new field
+                field, val = match.groups()
+                if field not in all_fields:
                     raise ValueError(
-                        f"Value '{value}' of field '{field}' in flow docstring is not allowed"
+                        f"Label '{field}' found in docstring is not valid; "
+                        f"must be one of: {all_fields}"
                     )
-                result[field] = value
-            elif len(matches) > 1:
-                raise ValueError(
-                    f"Found {len(matches)} entries for '{field}' in flow docstring; "
-                    "must have at most 1"
-                )
+                if field in result:
+                    raise ValueError(
+                        f"Found multiple entries for '{field}' in flow docstring; "
+                        "must have at most 1"
+                    )
+                # And begin capturing the new value
+                value = [val.strip()]
+            else:
+                if field:
+                    # This line isn't a new field, but we already started capturing a previous one
+                    # So add this line to that field's value
+                    value.append(line.strip())
+
+        # We've reached the end of the document, so tie off the last field we were capturing
+        if field:
+            result[field] = " ".join(value).strip()
+
+    # Check that all required fields were found
+    for field in required_fields:
+        if field not in result:
+            raise ValueError(f"Missing required field :{field}: in docstring")
+    # Set default values for fields not present in the docstring
+    for field in optional_fields:
+        if field not in result:
+            result[field] = None
     return result
 
 
