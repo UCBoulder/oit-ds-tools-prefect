@@ -285,11 +285,7 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch, label="
             flow_func = getattr(module, flow_function_name)
 
         # Parse docstring fields and action on them as appropriate
-        required_fields = ["schedule", "image_name", "main_params"]
-        optional_fields = ["tags", "source_systems", "sink_systems", "customer_contact"]
-        docstring_fields = parse_docstring_fields(
-            flow_func, required_fields, optional_fields
-        )
+        docstring_fields = parse_docstring_fields(inspect.getdoc(flow_func))
 
         # Validate and apply docstring fields
         flow_tags = [label]
@@ -405,11 +401,9 @@ def _get_repo_info():
     return label, repo_short_name, branch_name
 
 
-def parse_docstring_fields(
-    function: callable, required_fields: list, optional_fields: list
-):
+def parse_docstring_fields(docstring: str):
     """Looks at the given function docstring and extracts any Sphinx-style field labels (like
-    `:tags: crm-ops`) from the docstring that match those listed by `fields`. If field is not
+    `:tags: crm-ops`) from the docstring that match the expected fields. If field is not
     present in the docstring, its value is set to None. Finally, return a dictionary mapping field
     keys to values from the actual docstring.
 
@@ -422,7 +416,8 @@ def parse_docstring_fields(
     Raises ValueError if a required field is not in the docstring.
     """
 
-    docstring = inspect.getdoc(function)
+    required_fields = ["schedule", "image_name", "main_params"]
+    optional_fields = ["tags", "source_systems", "sink_systems", "customer_contact"]
     all_fields = list(set(optional_fields + required_fields))
     result = {}
     if docstring:
@@ -464,6 +459,7 @@ def parse_docstring_fields(
         # We've reached the end of the document, so tie off the last field we were capturing
         if field:
             result[field] = " ".join(value).strip()
+            print(result[field])
 
     # Check that all required fields were found
     for field in required_fields:
