@@ -401,7 +401,17 @@ def _get_repo_info():
     return label, repo_short_name, branch_name
 
 
-def parse_docstring_fields(docstring: str):
+# Use immutable tuples as default values to avoid dangerous-default-arg
+def parse_docstring_fields(
+    docstring: str,
+    required_fields: list[str] = ("schedule", "image_name", "main_params"),
+    optional_fields: list[str] = (
+        "tags",
+        "source_systems",
+        "sink_systems",
+        "customer_contact",
+    ),
+):
     """Looks at the given function docstring and extracts any Sphinx-style field labels (like
     `:tags: crm-ops`) from the docstring that match the expected fields. If field is not
     present in the docstring, its value is set to None. Finally, return a dictionary mapping field
@@ -416,8 +426,6 @@ def parse_docstring_fields(docstring: str):
     Raises ValueError if a required field is not in the docstring.
     """
 
-    required_fields = ["schedule", "image_name", "main_params"]
-    optional_fields = ["tags", "source_systems", "sink_systems", "customer_contact"]
     all_fields = list(set(optional_fields + required_fields))
     result = {}
     if docstring:
