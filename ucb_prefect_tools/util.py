@@ -404,8 +404,8 @@ def _get_repo_info():
 # Use immutable tuples as default values to avoid dangerous-default-arg
 def parse_docstring_fields(
     docstring: str,
-    required_fields: list[str] = ("schedule", "image_name", "main_params"),
-    optional_fields: list[str] = (
+    required_fields: tuple[str] = ("schedule", "image_name", "main_params"),
+    optional_fields: tuple[str] = (
         "tags",
         "source_systems",
         "sink_systems",
