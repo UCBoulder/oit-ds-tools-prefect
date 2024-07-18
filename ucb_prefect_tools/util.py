@@ -467,7 +467,6 @@ def parse_docstring_fields(
         # We've reached the end of the document, so tie off the last field we were capturing
         if field:
             result[field] = " ".join(value).strip()
-            print(result[field])
 
     # Check that all required fields were found
     for field in required_fields:
