@@ -163,7 +163,7 @@ def run_flow_command_line_interface(
     you are up to date with your remote branch. This is because Prefect will pull your code from
     Github when running the flow.
 
-    Command-line options:
+    Command-line options (can only be used with non-main-branch deployments):
 
         `--image-name`: Change what image to use for deployment from what is specified in the flow
             docstring
@@ -173,12 +173,7 @@ def run_flow_command_line_interface(
             this will be the same as the branch name. See the oit-ds-tools-prefect-images repo for
             information about building images.
 
-        `--label`: This determines what work pool will be used for the deployment. Options are
-            `main` or `dev`, and the default is based on the current git branch. If you deploy a
-            main flow with the dev label, it will act like a dev deployment with no schedule, error
-            notifications, etc. If you deploy a dev flow with a main label, it will run just like
-            a dev deployment except using the main namespace in Kubernetes. You could also create
-            a new work pool/namespace and point the deployment at it using this option.
+        `--work-pool`: Change the work pool for the deployment.
 
     When deploying a flow, the following Sphinx-style docstring fields are used to define certain
     parameters (see oit-ds-flows-template for an example):
@@ -193,6 +188,8 @@ def run_flow_command_line_interface(
             deployment, future redeploys will not reactivate that schedule by design: it must be
             manually reactivated.
         image_name: The image to use for this flow, usually just oit-ds-prefect-default.
+        infra: Determines the work pool for the deployment. On the main Git branch, the work pool
+            will be `{infra}-main`, otherwise `{infra}-dev`.
         tags: (Optional) Any additional tags to apply to main-branch deployments of this flow. At
             least list the autotest tag for flows which can safely be run with default (i.e. dev)
             parameters as part of automated testing.
@@ -210,9 +207,9 @@ def run_flow_command_line_interface(
         args = sys.argv[1:]
     parser = argparse.ArgumentParser()
     parser.add_argument("command", choices=["deploy", "run"])
-    parser.add_argument("--image-name", type=str, default="infer")
-    parser.add_argument("--image-branch", type=str, default="main")
-    parser.add_argument("--label", type=str, default="infer")
+    parser.add_argument("--image-name", type=str, default=None)
+    parser.add_argument("--image-branch", type=str, default=None)
+    parser.add_argument("--work-pool", type=str, default=None)
     parsed_args = parser.parse_args(args)
     if parsed_args.command == "deploy":
         _deploy(
@@ -220,7 +217,7 @@ def run_flow_command_line_interface(
             flow_function_name,
             parsed_args.image_name,
             parsed_args.image_branch,
-            parsed_args.label,
+            parsed_args.work_pool,
         )
     if parsed_args.command == "run":
         if git.Repo().active_branch.name == "main" and parsed_args.label == "infer":
@@ -233,7 +230,7 @@ def run_flow_command_line_interface(
             flow_function_name,
             parsed_args.image_name,
             parsed_args.image_branch,
-            parsed_args.label,
+            parsed_args.work_pool,
         )
         print("Running deployment...")
         flow_run = deployments.run_deployment(deployment_id)
@@ -250,7 +247,7 @@ async def _delete_deployment(deployment_id):
         await client.delete_deployment(deployment_id)
 
 
-def _deploy(flow_filename, flow_function_name, image_name, image_branch, label="infer"):
+def _deploy(flow_filename, flow_function_name, image_name, image_branch, work_pool):
     # pylint: disable=too-many-locals
     # pylint: disable=too-many-branches
     # pylint: disable=too-many-statements
@@ -264,15 +261,15 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch, label="
             f"File {flow_filename} not found in the {LOCAL_FLOW_FOLDER} folder"
         )
 
-    # Get repo info
-    inferred_label, repo_name, branch_name = _get_repo_info()
+    # Get repo info and set deployment name
+    label, repo_name, branch_name = _get_repo_info()
+    if label == "main" and any([image_name, image_branch, work_pool]):
+        raise ValueError(
+            "Cannot specify deployment options when deploying from main. Change branches or "
+            "adjust options in the flow docstring."
+        )
     module_name = os.path.splitext(flow_filename)[0]
-    # Set label and deployment name based on label parameter
-    if label == "infer":
-        label = inferred_label
-        deployment_name = f"{repo_name} | {branch_name} | {module_name}"
-    else:
-        deployment_name = f"{repo_name} | {branch_name} (as {label}) | {module_name}"
+    deployment_name = f"{repo_name} | {branch_name} | {module_name}"
 
     # Temporarily change into the flows folder
     with _ChangeDir(LOCAL_FLOW_FOLDER):
@@ -295,8 +292,14 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch, label="
             ]
         else:
             additional_tags = []
-        if image_name == "infer":
+        if not work_pool:
+            if not docstring_fields["infra"]:
+                docstring_fields["infra"] = "k8s"
+            work_pool = f"{docstring_fields['infra']}-{label}"
+        if not image_name:
             image_name = docstring_fields["image_name"]
+        if not image_branch:
+            image_branch = "main"
         image_uri = f"{DOCKER_REGISTRY}/{image_name}:{image_branch}"
         try:
             main_params = json.loads(docstring_fields["main_params"])
@@ -304,7 +307,6 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch, label="
             raise ValueError(":main_params: label must provide valid JSON") from err
 
         # Deploy
-        work_pool_name = f"k8s-{label}"
         flow_obj = flow.from_source(
             source=GitRepository(
                 url=f"https://github.com/{GITHUB_ORG}/{REPO_PREFIX}{repo_name}.git",
@@ -313,7 +315,7 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch, label="
             ),
             entrypoint=f"{LOCAL_FLOW_FOLDER}/{module_name}.py:{flow_function_name}",
         )
-        if inferred_label == "main" and label == "main":
+        if label == "main":
             flow_tags.extend(additional_tags)
             if docstring_fields["schedule"] == "None":
                 schedule = None
@@ -323,7 +325,7 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch, label="
                 )
             deployment_id = flow_obj.deploy(
                 name=deployment_name,
-                work_pool_name=work_pool_name,
+                work_pool_name=work_pool,
                 image=image_uri,
                 tags=flow_tags,
                 schedule=schedule,
@@ -332,7 +334,7 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch, label="
                 print_next_steps=False,
             )
             print(
-                f"Deployed {deployment_name}\n\tWork Pool: {work_pool_name}\n\t"
+                f"Deployed {deployment_name}\n\tWork Pool: {work_pool}\n\t"
                 f"Docker image: {image_uri}\n\tTags: {flow_tags}\n\t"
                 f"Schedule: {docstring_fields['schedule']}\n\tDeployment URL: "
                 f"{settings.PREFECT_UI_URL.value()}/deployments/deployment/{deployment_id}"
@@ -340,14 +342,14 @@ def _deploy(flow_filename, flow_function_name, image_name, image_branch, label="
         else:
             deployment_id = flow_obj.deploy(
                 name=deployment_name,
-                work_pool_name=work_pool_name,
+                work_pool_name=work_pool,
                 image=image_uri,
                 tags=flow_tags,
                 build=False,
                 print_next_steps=False,
             )
             print(
-                f"Deployed {deployment_name}\n\tWork Pool: {work_pool_name}\n\t"
+                f"Deployed {deployment_name}\n\tWork Pool: {work_pool}\n\t"
                 f"Docker image: {image_uri}\n\tTags: {flow_tags}\n\tDeployment URL: "
                 f"{settings.PREFECT_UI_URL.value()}/deployments/deployment/{deployment_id}"
             )
@@ -406,6 +408,7 @@ def parse_docstring_fields(
     docstring: str,
     required_fields: tuple[str] = ("schedule", "image_name", "main_params"),
     optional_fields: tuple[str] = (
+        "infra",
         "tags",
         "source_systems",
         "sink_systems",
