@@ -41,8 +41,9 @@ autodoc_default_options = {
 }
 
 autosummary_generate = True
-autosummary_imported_members = True
 add_module_names = False
+
+autodoc_mock_imports = ['rpy2']
 
 # Sort members by source order
 autodoc_member_order = "bysource"
