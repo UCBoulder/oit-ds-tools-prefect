@@ -220,11 +220,8 @@ def run_flow_command_line_interface(
             parsed_args.work_pool,
         )
     if parsed_args.command == "run":
-        if git.Repo().active_branch.name == "main" and parsed_args.label == "infer":
-            raise RuntimeError(
-                "Command `run` not allowed from main branch unless you specify an alternate "
-                "`--label`"
-            )
+        if git.Repo().active_branch.name == "main":
+            raise RuntimeError("Command `run` not allowed from main branch")
         deployment_id = _deploy(
             flow_filename,
             flow_function_name,
