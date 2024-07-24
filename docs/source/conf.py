@@ -28,6 +28,7 @@ extensions = [
     "task_autodoc",
     "sphinx.ext.napoleon",
     "sphinx.ext.viewcode",
+    "sphinx_autodoc_typehints",
 ]
 
 templates_path = ["_templates"]
@@ -42,11 +43,9 @@ autodoc_default_options = {
 
 autosummary_generate = True
 add_module_names = False
-
-autodoc_mock_imports = ['rpy2']
-
-# Sort members by source order
+autodoc_mock_imports = ["rpy2"]
 autodoc_member_order = "bysource"
+typehints_defaults = 'comma'
 
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
