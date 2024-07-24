@@ -28,7 +28,7 @@ jobs:
           make html
 
       - name: Upload pages content as an artifact
-        uses: actions/upload-pages-artifact
+        uses: actions/upload-pages-artifact@v3
         with:
           path: ./docs/build/html
 
